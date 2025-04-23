@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 9
 sidebar_label: Conversations
 ---
 
@@ -33,6 +33,8 @@ gpt4cli convo 2- # show messages 2 through the end of the conversation
 
 Every time the AI model replies, Gpt4cli will summarize the conversation so far in the background and store the summary in case it's needed later. When the conversation size in tokens exceeds the model's limit, Gpt4cli will automatically replace some number of older messages with the corresponding summary. It will summarize as many messages as necessary to keep the conversation size under the limit.
 
+Summaries are also used by the model as a form of working memory to keep track of the state of the plan—what's been implemented and what remains to be done.
+
 You can see the latest summary with the `summary` command.
 
 ```bash
@@ -44,4 +46,3 @@ As with the `convo` command, you can output the summary in plain text with no AN
 ```bash
 gpt4cli summary --plain
 ```
-

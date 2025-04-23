@@ -2,9 +2,9 @@ package lib
 
 import (
 	"fmt"
-	"gpt4cli/api"
-	"gpt4cli/term"
 	"os"
+	"gpt4cli-cli/api"
+	"gpt4cli-cli/term"
 
 	"github.com/fatih/color"
 )

@@ -3,19 +3,20 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"gpt4cli-server/db"
 	"io"
 	"log"
 	"net/http"
+	"gpt4cli-server/db"
+
+	shared "gpt4cli-shared"
 
 	"github.com/gorilla/mux"
-	"github.com/khulnasoft/gpt4cli/shared"
 )
 
 func ListLogsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListLogsHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -24,24 +25,35 @@ func ListLogsHandler(w http.ResponseWriter, r *http.Request) {
 	planId := vars["planId"]
 	branch := vars["branch"]
 
-	log.Println("planId: ", planId)
+	log.Println("planId: ", planId, "branch: ", branch)
 
 	if authorizePlan(w, planId, auth) == nil {
 		return
 	}
 
-	var err error
-	ctx, cancel := context.WithCancel(context.Background())
-	unlockFn := lockRepo(w, r, auth, db.LockScopeRead, ctx, cancel, true)
-	if unlockFn == nil {
-		return
-	} else {
-		defer func() {
-			(*unlockFn)(err)
-		}()
-	}
+	ctx, cancel := context.WithCancel(r.Context())
 
-	body, shas, err := db.GetGitCommitHistory(auth.OrgId, planId, branch)
+	var body string
+	var shas []string
+
+	err := db.ExecRepoOperation(db.ExecRepoOperationParams{
+		OrgId:    auth.OrgId,
+		UserId:   auth.User.Id,
+		PlanId:   planId,
+		Branch:   branch,
+		Reason:   "list logs",
+		Scope:    db.LockScopeRead,
+		Ctx:      ctx,
+		CancelFn: cancel,
+	}, func(repo *db.GitRepo) error {
+		var err error
+		body, shas, err = repo.GetGitCommitHistory(branch)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 
 	if err != nil {
 		log.Println("Error getting logs: ", err)
@@ -70,7 +82,7 @@ func ListLogsHandler(w http.ResponseWriter, r *http.Request) {
 func RewindPlanHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for RewindPlanHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -101,17 +113,20 @@ func RewindPlanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	unlockFn := lockRepo(w, r, auth, db.LockScopeWrite, ctx, cancel, true)
-	if unlockFn == nil {
-		return
-	} else {
-		defer func() {
-			(*unlockFn)(err)
-		}()
-	}
+	ctx, cancel := context.WithCancel(r.Context())
 
-	err = db.GitRewindToSha(auth.OrgId, planId, branch, requestBody.Sha)
+	err = db.ExecRepoOperation(db.ExecRepoOperationParams{
+		OrgId:    auth.OrgId,
+		UserId:   auth.User.Id,
+		PlanId:   planId,
+		Branch:   branch,
+		Reason:   "rewind plan",
+		Scope:    db.LockScopeWrite,
+		Ctx:      ctx,
+		CancelFn: cancel,
+	}, func(repo *db.GitRepo) error {
+		return repo.GitRewindToSha(branch, requestBody.Sha)
+	})
 
 	if err != nil {
 		log.Println("Error rewinding plan: ", err)
@@ -127,7 +142,22 @@ func RewindPlanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sha, latest, err := db.GetLatestCommit(auth.OrgId, planId, branch)
+	var sha string
+	var latest string
+
+	err = db.ExecRepoOperation(db.ExecRepoOperationParams{
+		OrgId:    auth.OrgId,
+		UserId:   auth.User.Id,
+		PlanId:   planId,
+		Branch:   branch,
+		Reason:   "get latest commit",
+		Scope:    db.LockScopeRead,
+		Ctx:      ctx,
+		CancelFn: cancel,
+	}, func(repo *db.GitRepo) error {
+		sha, latest, err = repo.GetLatestCommit(branch)
+		return err
+	})
 
 	if err != nil {
 		log.Println("Error getting latest commit: ", err)

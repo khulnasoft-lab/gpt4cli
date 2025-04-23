@@ -3,10 +3,14 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	shared "gpt4cli-shared"
 
 	"github.com/fatih/color"
 	"github.com/google/uuid"
@@ -67,7 +71,26 @@ func GetPlanConvo(orgId, planId string) ([]*ConvoMessage, error) {
 	return convo, nil
 }
 
-func StoreConvoMessage(message *ConvoMessage, currentUserId, branch string, commit bool) (string, error) {
+func GetConvoMessage(orgId, planId, messageId string) (*ConvoMessage, error) {
+	convoDir := getPlanConversationDir(orgId, planId)
+
+	filePath := filepath.Join(convoDir, messageId+".json")
+
+	bytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading convo message: %v", err)
+	}
+
+	var convoMessage ConvoMessage
+	err = json.Unmarshal(bytes, &convoMessage)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshalling convo message: %v", err)
+	}
+
+	return &convoMessage, nil
+}
+
+func StoreConvoMessage(repo *GitRepo, message *ConvoMessage, currentUserId, branch string, commit bool) (string, error) {
 	convoDir := getPlanConversationDir(message.OrgId, message.PlanId)
 
 	ts := time.Now().UTC()
@@ -113,10 +136,57 @@ func StoreConvoMessage(message *ConvoMessage, currentUserId, branch string, comm
 		}
 	}
 
-	msg := fmt.Sprintf("Message #%d | %s | %d 🪙", message.Num, desc, message.Tokens)
+	replyTags := message.Flags.GetReplyTags()
+
+	var msg string
+	if len(replyTags) > 0 {
+		msg = fmt.Sprintf("Message #%d | %s | %s | %d 🪙", message.Num, desc, strings.Join(replyTags, " | "), message.Tokens)
+	} else {
+		msg = fmt.Sprintf("Message #%d | %s | %d 🪙", message.Num, desc, message.Tokens)
+	}
+
+	if len(message.AddedSubtasks) > 0 {
+		msg += "\n\n"
+		for _, subtask := range message.AddedSubtasks {
+			msg += "\n• " + subtask.Title
+		}
+	}
+
+	if len(message.RemovedSubtasks) > 0 {
+		msg += "\n\n"
+		msg += "Removed Tasks"
+		for _, subtask := range message.RemovedSubtasks {
+			msg += "\n• " + subtask
+		}
+	}
+
+	log.Println("StoreConvoMessage - message.Flags.CurrentStage.TellStage:", message.Flags.CurrentStage.TellStage)
+	log.Println("StoreConvoMessage - message.Subtask:", message.Subtask)
+
+	if message.Flags.CurrentStage.TellStage == shared.TellStageImplementation && message.Subtask != nil {
+		msg += "\n\n" + "📋 " + message.Subtask.Title
+		if len(message.Subtask.UsesFiles) > 0 {
+			for _, file := range message.Subtask.UsesFiles {
+				msg += "\n • 📄 " + file
+			}
+		}
+	}
+
+	if message.Flags.DidCompletePlan {
+		msg += "\n\n" + "🏁 Completed Plan"
+	}
+
+	// Cleaner without the cut off message - maybe need a separate command to show both the log and full messages?
+	// cutoff := 140
+	// if len(message.Message) > cutoff {
+	// 	msg += "\n\n" + message.Message[:cutoff] + "..."
+	// } else {
+	// 	msg += "\n\n" + message.Message
+	// }
 
 	if commit {
-		err = GitAddAndCommit(message.OrgId, message.PlanId, branch, msg)
+		log.Printf("[Git] StoreConvoMessage - committing convo message: %s, branch: %s", msg, branch)
+		err = repo.GitAddAndCommit(branch, msg)
 		if err != nil {
 			return "", fmt.Errorf("error committing convo message: %v", err)
 		}

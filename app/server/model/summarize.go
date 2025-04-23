@@ -3,28 +3,41 @@ package model
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"gpt4cli-server/db"
 	"gpt4cli-server/model/prompts"
+	"gpt4cli-server/types"
+	"strings"
 	"time"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
+
 	"github.com/sashabaranov/go-openai"
 )
 
 type PlanSummaryParams struct {
-	Conversation                []*openai.ChatCompletionMessage
+	Auth                        *types.ServerAuth
+	Plan                        *db.Plan
+	ModelStreamId               string
+	ModelPackName               string
+	Conversation                []*types.ExtendedChatMessage
+	ConversationNumTokens       int
 	LatestConvoMessageId        string
 	LatestConvoMessageCreatedAt time.Time
 	NumMessages                 int
-	OrgId                       string
-	PlanId                      string
+	SessionId                   string
 }
 
-func PlanSummary(client *openai.Client, config shared.ModelRoleConfig, params PlanSummaryParams, ctx context.Context) (*db.ConvoSummary, error) {
-	messages := []openai.ChatCompletionMessage{
+func PlanSummary(clients map[string]ClientInfo, config shared.ModelRoleConfig, params PlanSummaryParams, ctx context.Context) (*db.ConvoSummary, *shared.ApiError) {
+	messages := []types.ExtendedChatMessage{
 		{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompts.Identity,
+			Role: openai.ChatMessageRoleSystem,
+			Content: []types.ExtendedChatMessagePart{
+				{
+					Type: openai.ChatMessagePartTypeText,
+					Text: prompts.Identity,
+				},
+			},
 		},
 	}
 
@@ -32,45 +45,51 @@ func PlanSummary(client *openai.Client, config shared.ModelRoleConfig, params Pl
 		messages = append(messages, *message)
 	}
 
-	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: prompts.PlanSummary,
+	messages = append(messages, types.ExtendedChatMessage{
+		Role: openai.ChatMessageRoleUser,
+		Content: []types.ExtendedChatMessagePart{
+			{
+				Type: openai.ChatMessagePartTypeText,
+				Text: prompts.PlanSummary,
+			},
+		},
 	})
 
-	fmt.Println("summarizing messages:")
-	// spew.Dump(messages)
-
-	resp, err := CreateChatCompletionWithRetries(
-		client,
-		ctx,
-		openai.ChatCompletionRequest{
-			Model:       config.BaseModelConfig.ModelName,
-			Messages:    messages,
-			Temperature: config.Temperature,
-			TopP:        config.TopP,
-		},
-	)
+	modelRes, err := ModelRequest(ctx, ModelRequestParams{
+		Clients:        clients,
+		Auth:           params.Auth,
+		Plan:           params.Plan,
+		ModelConfig:    &config,
+		Purpose:        "Conversation summary",
+		ConvoMessageId: params.LatestConvoMessageId,
+		ModelStreamId:  params.ModelStreamId,
+		Messages:       messages,
+		SessionId:      params.SessionId,
+	})
 
 	if err != nil {
-		fmt.Println("PlanSummary err:", err)
-
-		return nil, err
+		return nil, &shared.ApiError{
+			Type:   shared.ApiErrorTypeOther,
+			Status: http.StatusInternalServerError,
+			Msg:    fmt.Sprintf("error generating plan summary: %v", err),
+		}
 	}
 
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("no response from GPT")
+	summary := modelRes.Content
+	if !strings.HasPrefix(summary, "## Summary of the plan so far:") {
+		summary = "## Summary of the plan so far:\n\n" + summary
 	}
 
-	content := resp.Choices[0].Message.Content
-
-	// log.Println("Plan summary content:")
-	// log.Println(content)
+	var tokens int
+	if modelRes.Usage != nil {
+		tokens = modelRes.Usage.CompletionTokens
+	}
 
 	return &db.ConvoSummary{
-		OrgId:                       params.OrgId,
-		PlanId:                      params.PlanId,
-		Summary:                     "## Summary of the plan so far:\n\n" + content,
-		Tokens:                      resp.Usage.CompletionTokens,
+		OrgId:                       params.Auth.OrgId,
+		PlanId:                      params.Plan.Id,
+		Summary:                     summary,
+		Tokens:                      tokens,
 		LatestConvoMessageId:        params.LatestConvoMessageId,
 		LatestConvoMessageCreatedAt: params.LatestConvoMessageCreatedAt,
 		NumMessages:                 params.NumMessages,

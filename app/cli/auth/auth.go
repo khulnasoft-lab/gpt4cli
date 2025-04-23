@@ -3,11 +3,23 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
-	"gpt4cli/fs"
-	"gpt4cli/term"
-	"gpt4cli/types"
 	"os"
+	"gpt4cli-cli/fs"
+	"gpt4cli-cli/term"
+
+	shared "gpt4cli-shared"
 )
+
+var openUnauthenticatedCloudURL func(msg, path string)
+var openAuthenticatedURL func(msg, path string)
+
+func SetOpenUnauthenticatedCloudURLFn(fn func(msg, path string)) {
+	openUnauthenticatedCloudURL = fn
+}
+
+func SetOpenAuthenticatedURLFn(fn func(msg, path string)) {
+	openAuthenticatedURL = fn
+}
 
 func MustResolveAuthWithOrg() {
 	MustResolveAuth(true)
@@ -35,7 +47,7 @@ func MustResolveAuth(requireOrg bool) {
 		}
 	}
 
-	var auth types.ClientAuth
+	var auth shared.ClientAuth
 	err = json.Unmarshal(bytes, &auth)
 	if err != nil {
 		term.OutputErrorAndExit("error unmarshalling auth.json: %v", err)
@@ -52,19 +64,20 @@ func MustResolveAuth(requireOrg bool) {
 			term.OutputErrorAndExit("Error listing orgs: %v", apiErr.Msg)
 		}
 
-		orgId, orgName, err := resolveOrgAuth(orgs)
+		org, err := resolveOrgAuth(orgs, Current.IsLocalMode)
 
 		if err != nil {
 			term.OutputErrorAndExit("Error resolving org: %v", err)
 		}
 
-		if orgId == "" {
+		if org.Id == "" {
 			// still no org--exit now
 			term.OutputErrorAndExit("No org")
 		}
 
-		Current.OrgId = orgId
-		Current.OrgName = orgName
+		Current.OrgId = org.Id
+		Current.OrgName = org.Name
+		Current.IntegratedModelsMode = org.IntegratedModelsMode
 
 		err = writeCurrentAuth()
 
@@ -72,22 +85,20 @@ func MustResolveAuth(requireOrg bool) {
 			term.OutputErrorAndExit("Error writing auth: %v", err)
 		}
 	}
-
 }
 
 func RefreshInvalidToken() error {
 	if Current == nil {
 		return fmt.Errorf("error refreshing token: auth not loaded")
 	}
-
-	hasAccount, pin, err := verifyEmail(Current.Email, Current.Host)
+	res, err := verifyEmail(Current.Email, Current.Host)
 
 	if err != nil {
 		return fmt.Errorf("error verifying email: %v", err)
 	}
 
-	if hasAccount {
-		return signIn(Current.Email, pin, Current.Host)
+	if res.hasAccount {
+		return signIn(Current.Email, res.pin, Current.Host)
 	} else {
 		host := Current.Host
 		if host == "" {

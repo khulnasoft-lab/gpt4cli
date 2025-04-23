@@ -2,12 +2,13 @@ package lib
 
 import (
 	"fmt"
-	"gpt4cli/api"
-	"gpt4cli/term"
 	"os"
+	"gpt4cli-cli/api"
+	"gpt4cli-cli/term"
+
+	shared "gpt4cli-shared"
 
 	"github.com/fatih/color"
-	"github.com/khulnasoft/gpt4cli/shared"
 )
 
 const GoBack = "← Go back"
@@ -80,7 +81,7 @@ func SelectModelForRole(customModels []*shared.AvailableModel, role shared.Model
 			}
 
 			if p == provider {
-				label := fmt.Sprintf("%s → %s | max %d 🪙", m.Provider, m.ModelName, m.MaxTokens)
+				label := fmt.Sprintf("%s | max %d 🪙", m.ModelString(), m.MaxTokens)
 				opts = append(opts, label)
 				selectableModels = append(selectableModels, m)
 			}

@@ -8,11 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ses"
-	"net/mail"
 )
 
-// sendEmailViaSES sends an email using AWS SES
-func sendEmailViaSES(recipient, subject, htmlBody, textBody string) error {
+// SendEmailViaSES sends an email using AWS SES
+func SendEmailViaSES(recipient, subject, htmlBody, textBody string) error {
 	sess, err := session.NewSession()
 	if err != nil {
 		return fmt.Errorf("error creating AWS session: %v", err)
@@ -54,10 +53,6 @@ func sendEmailViaSES(recipient, subject, htmlBody, textBody string) error {
 }
 
 func sendEmailViaSMTP(recipient, subject, htmlBody, textBody string) error {
-	if !isValidEmail(recipient) {
-		return fmt.Errorf("invalid recipient email address")
-	}
-
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
@@ -98,9 +93,4 @@ func sendEmailViaSMTP(recipient, subject, htmlBody, textBody string) error {
 	}
 
 	return nil
-}
-
-func isValidEmail(email string) bool {
-	_, err := mail.ParseAddress(email)
-	return err == nil
 }

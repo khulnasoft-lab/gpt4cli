@@ -2,18 +2,20 @@ package handlers
 
 import (
 	"encoding/json"
-	"gpt4cli-server/db"
 	"log"
 	"net/http"
+	"os"
+	"gpt4cli-server/db"
+
+	shared "gpt4cli-shared"
 
 	"github.com/gorilla/mux"
-	"github.com/khulnasoft/gpt4cli/shared"
 )
 
 func CreateCustomModelHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for CreateCustomModelHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -24,22 +26,30 @@ func CreateCustomModelHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	if os.Getenv("IS_CLOUD") != "" && model.Provider == shared.ModelProviderCustom {
+		http.Error(w, "Custom model providers are not supported on Gpt4cli Cloud", http.StatusBadRequest)
+		return
+	}
+
+	baseModelConfig := model.BaseModelConfig
+
 	dbModel := &db.AvailableModel{
-		Id:                          model.Id,
-		OrgId:                       auth.OrgId,
-		Provider:                    model.Provider,
-		CustomProvider:              model.CustomProvider,
-		BaseUrl:                     model.BaseUrl,
-		ModelName:                   model.ModelName,
-		MaxTokens:                   model.MaxTokens,
-		ApiKeyEnvVar:                model.ApiKeyEnvVar,
-		IsOpenAICompatible:          model.IsOpenAICompatible,
-		HasJsonResponseMode:         model.HasJsonResponseMode,
-		HasStreaming:                model.HasStreaming,
-		HasFunctionCalling:          model.HasFunctionCalling,
-		HasStreamingFunctionCalls:   model.HasStreamingFunctionCalls,
-		DefaultMaxConvoTokens:       model.DefaultMaxConvoTokens,
-		DefaultReservedOutputTokens: model.DefaultReservedOutputTokens,
+		Id:                    model.Id,
+		OrgId:                 auth.OrgId,
+		Provider:              baseModelConfig.Provider,
+		CustomProvider:        baseModelConfig.CustomProvider,
+		BaseUrl:               baseModelConfig.BaseUrl,
+		ModelId:               baseModelConfig.ModelId,
+		ModelName:             baseModelConfig.ModelName,
+		Description:           model.Description,
+		MaxTokens:             baseModelConfig.MaxTokens,
+		ApiKeyEnvVar:          baseModelConfig.ApiKeyEnvVar,
+		HasImageSupport:       baseModelConfig.ModelCompatibility.HasImageSupport,
+		DefaultMaxConvoTokens: model.DefaultMaxConvoTokens,
+		MaxOutputTokens:       baseModelConfig.MaxOutputTokens,
+		ReservedOutputTokens:  baseModelConfig.ReservedOutputTokens,
+		PreferredOutputFormat: baseModelConfig.PreferredModelOutputFormat,
 	}
 
 	if err := db.CreateCustomModel(dbModel); err != nil {
@@ -53,10 +63,81 @@ func CreateCustomModelHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Successfully created custom model")
 }
 
+func UpdateCustomModelHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received request for UpdateCustomModelHandler")
+
+	auth := Authenticate(w, r, true)
+	if auth == nil {
+		return
+	}
+
+	modelId := mux.Vars(r)["modelId"]
+
+	var model shared.AvailableModel
+	if err := json.NewDecoder(r.Body).Decode(&model); err != nil {
+		log.Printf("Error decoding request body: %v\n", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	models, err := db.ListCustomModels(auth.OrgId)
+	if err != nil {
+		log.Printf("Error fetching custom models: %v\n", err)
+		http.Error(w, "Failed to fetch custom models: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	found := false
+	for _, m := range models {
+		if m.Id == modelId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "Custom model not found", http.StatusNotFound)
+		return
+	}
+
+	if os.Getenv("IS_CLOUD") != "" && model.Provider == shared.ModelProviderCustom {
+		http.Error(w, "Custom model providers are not supported on Gpt4cli Cloud", http.StatusBadRequest)
+		return
+	}
+
+	dbModel := &db.AvailableModel{
+		Id:                    modelId,
+		OrgId:                 auth.OrgId,
+		Provider:              model.BaseModelConfig.Provider,
+		CustomProvider:        model.BaseModelConfig.CustomProvider,
+		BaseUrl:               model.BaseModelConfig.BaseUrl,
+		ModelId:               model.BaseModelConfig.ModelId,
+		ModelName:             model.BaseModelConfig.ModelName,
+		Description:           model.Description,
+		MaxTokens:             model.BaseModelConfig.MaxTokens,
+		ApiKeyEnvVar:          model.BaseModelConfig.ApiKeyEnvVar,
+		HasImageSupport:       model.BaseModelConfig.ModelCompatibility.HasImageSupport,
+		DefaultMaxConvoTokens: model.DefaultMaxConvoTokens,
+		MaxOutputTokens:       model.BaseModelConfig.MaxOutputTokens,
+		ReservedOutputTokens:  model.BaseModelConfig.ReservedOutputTokens,
+		PreferredOutputFormat: model.BaseModelConfig.PreferredModelOutputFormat,
+	}
+
+	if err := db.UpdateCustomModel(dbModel); err != nil {
+		log.Printf("Error updating custom model: %v\n", err)
+		http.Error(w, "Failed to update custom model: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	log.Println("Successfully updated custom model")
+}
+
 func ListCustomModelsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListCustomModelsHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -76,12 +157,33 @@ func ListCustomModelsHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteAvailableModelHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for DeleteAvailableModelHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
 
 	modelId := mux.Vars(r)["modelId"]
+
+	models, err := db.ListCustomModels(auth.OrgId)
+	if err != nil {
+		log.Printf("Error fetching custom models: %v\n", err)
+		http.Error(w, "Failed to fetch custom models: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	found := false
+	for _, m := range models {
+		if m.Id == modelId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "Custom model not found", http.StatusNotFound)
+		return
+	}
+
 	if err := db.DeleteAvailableModel(modelId); err != nil {
 		log.Printf("Error deleting custom model: %v\n", err)
 		http.Error(w, "Failed to delete custom model: "+err.Error(), http.StatusInternalServerError)
@@ -96,7 +198,7 @@ func DeleteAvailableModelHandler(w http.ResponseWriter, r *http.Request) {
 func CreateModelPackHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for CreateModelPackHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -108,15 +210,18 @@ func CreateModelPackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dbMs := &db.ModelPack{
-		OrgId:       auth.OrgId,
-		Name:        ms.Name,
-		Description: ms.Description,
-		Planner:     ms.Planner,
-		PlanSummary: ms.PlanSummary,
-		Builder:     ms.Builder,
-		Namer:       ms.Namer,
-		CommitMsg:   ms.CommitMsg,
-		ExecStatus:  ms.ExecStatus,
+		OrgId:            auth.OrgId,
+		Name:             ms.Name,
+		Description:      ms.Description,
+		Planner:          ms.Planner,
+		Architect:        ms.Architect,
+		Coder:            ms.Coder,
+		Builder:          ms.Builder,
+		WholeFileBuilder: ms.WholeFileBuilder,
+		Namer:            ms.Namer,
+		CommitMsg:        ms.CommitMsg,
+		PlanSummary:      ms.PlanSummary,
+		ExecStatus:       ms.ExecStatus,
 	}
 
 	if err := db.CreateModelPack(dbMs); err != nil {
@@ -130,10 +235,73 @@ func CreateModelPackHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Successfully created model pack")
 }
 
+func UpdateModelPackHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received request for UpdateModelPackHandler")
+
+	auth := Authenticate(w, r, true)
+	if auth == nil {
+		return
+	}
+
+	mpId := mux.Vars(r)["setId"]
+
+	var ms shared.ModelPack
+	if err := json.NewDecoder(r.Body).Decode(&ms); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	packs, err := db.ListModelPacks(auth.OrgId)
+	if err != nil {
+		log.Printf("Error fetching model packs: %v\n", err)
+		http.Error(w, "Failed to fetch model packs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	found := false
+	for _, m := range packs {
+		if m.Id == mpId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "Model pack not found", http.StatusNotFound)
+		return
+	}
+
+	dbMs := &db.ModelPack{
+		Id:               mpId,
+		OrgId:            auth.OrgId,
+		Name:             ms.Name,
+		Description:      ms.Description,
+		Planner:          ms.Planner,
+		Coder:            ms.Coder,
+		PlanSummary:      ms.PlanSummary,
+		Builder:          ms.Builder,
+		WholeFileBuilder: ms.WholeFileBuilder,
+		Namer:            ms.Namer,
+		CommitMsg:        ms.CommitMsg,
+		ExecStatus:       ms.ExecStatus,
+		Architect:        ms.Architect,
+	}
+
+	if err := db.UpdateModelPack(dbMs); err != nil {
+		log.Printf("Error updating model pack: %v\n", err)
+		http.Error(w, "Failed to update model pack: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	log.Println("Successfully updated model pack")
+}
+
 func ListModelPacksHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListModelPacksHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -159,16 +327,36 @@ func ListModelPacksHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteModelPackHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for DeleteModelPackHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
 
-	setId := mux.Vars(r)["setId"]
+	mpId := mux.Vars(r)["setId"]
 
-	log.Printf("Deleting model pack with id: %s\n", setId)
+	packs, err := db.ListModelPacks(auth.OrgId)
+	if err != nil {
+		log.Printf("Error fetching model packs: %v\n", err)
+		http.Error(w, "Failed to fetch model packs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	if err := db.DeleteModelPack(setId); err != nil {
+	found := false
+	for _, m := range packs {
+		if m.Id == mpId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "Model pack not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Deleting model pack with id: %s\n", mpId)
+
+	if err := db.DeleteModelPack(mpId); err != nil {
 		log.Printf("Error deleting model pack: %v\n", err)
 		http.Error(w, "Failed to delete model pack: "+err.Error(), http.StatusInternalServerError)
 		return

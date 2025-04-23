@@ -2,44 +2,76 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"gpt4cli/types"
 	"io"
 	"log"
 	"net/http"
+	"gpt4cli-cli/types"
 	"strings"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
 )
 
-func (a *Api) StartTrial() (*shared.StartTrialResponse, *shared.ApiError) {
-	serverUrl := cloudApiHost + "/accounts/start_trial"
+func (a *Api) CreateCliTrialSession() (string, *shared.ApiError) {
+	serverUrl := CloudApiHost + "/accounts/cli_trial_session"
 
 	resp, err := unauthenticatedClient.Post(serverUrl, "application/json", nil)
+
 	if err != nil {
-		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+		return "", &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
+		return "", apiErr
+	}
+
+	bytes, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return "", &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error reading response: %v", err)}
+	}
+
+	return string(bytes), nil
+}
+
+func (a *Api) GetCliTrialSession(token string) (*shared.SessionResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/accounts/cli_trial_session/%s", CloudApiHost, token)
+
+	resp, err := unauthenticatedClient.Get(serverUrl)
+
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
 		return nil, apiErr
 	}
 
-	var startTrialResponse shared.StartTrialResponse
-	err = json.NewDecoder(resp.Body).Decode(&startTrialResponse)
+	var session shared.SessionResponse
+	err = json.NewDecoder(resp.Body).Decode(&session)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
 	}
 
-	return &startTrialResponse, nil
+	return &session, nil
 }
 
 func (a *Api) CreateProject(req shared.CreateProjectRequest) (*shared.CreateProjectResponse, *shared.ApiError) {
-	serverUrl := getApiHost() + "/projects"
+	serverUrl := GetApiHost() + "/projects"
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -54,7 +86,7 @@ func (a *Api) CreateProject(req shared.CreateProjectRequest) (*shared.CreateProj
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreateProject(req)
@@ -72,7 +104,7 @@ func (a *Api) CreateProject(req shared.CreateProjectRequest) (*shared.CreateProj
 }
 
 func (a *Api) ListProjects() ([]*shared.Project, *shared.ApiError) {
-	serverUrl := getApiHost() + "/projects"
+	serverUrl := GetApiHost() + "/projects"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -81,7 +113,7 @@ func (a *Api) ListProjects() ([]*shared.Project, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListProjects()
@@ -99,7 +131,7 @@ func (a *Api) ListProjects() ([]*shared.Project, *shared.ApiError) {
 }
 
 func (a *Api) SetProjectPlan(projectId string, req shared.SetProjectPlanRequest) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/projects/%s/set_plan", getApiHost(), projectId)
+	serverUrl := fmt.Sprintf("%s/projects/%s/set_plan", GetApiHost(), projectId)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return &shared.ApiError{Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -119,7 +151,7 @@ func (a *Api) SetProjectPlan(projectId string, req shared.SetProjectPlanRequest)
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
 			return a.SetProjectPlan(projectId, req)
@@ -131,7 +163,7 @@ func (a *Api) SetProjectPlan(projectId string, req shared.SetProjectPlanRequest)
 }
 
 func (a *Api) RenameProject(projectId string, req shared.RenameProjectRequest) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/projects/%s/rename", getApiHost(), projectId)
+	serverUrl := fmt.Sprintf("%s/projects/%s/rename", GetApiHost(), projectId)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return &shared.ApiError{Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -151,7 +183,7 @@ func (a *Api) RenameProject(projectId string, req shared.RenameProjectRequest) *
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -163,7 +195,7 @@ func (a *Api) RenameProject(projectId string, req shared.RenameProjectRequest) *
 	return nil
 }
 func (a *Api) ListPlans(projectIds []string) ([]*shared.Plan, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans?", getApiHost())
+	serverUrl := fmt.Sprintf("%s/plans?", GetApiHost())
 	parts := []string{}
 	for _, projectId := range projectIds {
 		parts = append(parts, fmt.Sprintf("projectId=%s", projectId))
@@ -179,7 +211,7 @@ func (a *Api) ListPlans(projectIds []string) ([]*shared.Plan, *shared.ApiError) 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -198,7 +230,7 @@ func (a *Api) ListPlans(projectIds []string) ([]*shared.Plan, *shared.ApiError) 
 }
 
 func (a *Api) ListArchivedPlans(projectIds []string) ([]*shared.Plan, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/archive?", getApiHost())
+	serverUrl := fmt.Sprintf("%s/plans/archive?", GetApiHost())
 	parts := []string{}
 	for _, projectId := range projectIds {
 		parts = append(parts, fmt.Sprintf("projectId=%s", projectId))
@@ -213,7 +245,7 @@ func (a *Api) ListArchivedPlans(projectIds []string) ([]*shared.Plan, *shared.Ap
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListArchivedPlans(projectIds)
@@ -231,7 +263,7 @@ func (a *Api) ListArchivedPlans(projectIds []string) ([]*shared.Plan, *shared.Ap
 }
 
 func (a *Api) ListPlansRunning(projectIds []string, includeRecent bool) (*shared.ListPlansRunningResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/ps?", getApiHost())
+	serverUrl := fmt.Sprintf("%s/plans/ps?", GetApiHost())
 	parts := []string{}
 	for _, projectId := range projectIds {
 		parts = append(parts, fmt.Sprintf("projectId=%s", projectId))
@@ -249,7 +281,7 @@ func (a *Api) ListPlansRunning(projectIds []string, includeRecent bool) (*shared
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListPlansRunning(projectIds, includeRecent)
@@ -267,7 +299,7 @@ func (a *Api) ListPlansRunning(projectIds []string, includeRecent bool) (*shared
 }
 
 func (a *Api) GetCurrentBranchByPlanId(projectId string, req shared.GetCurrentBranchByPlanIdRequest) (map[string]*shared.Branch, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/projects/%s/plans/current_branches", getApiHost(), projectId)
+	serverUrl := fmt.Sprintf("%s/projects/%s/plans/current_branches", GetApiHost(), projectId)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -292,7 +324,7 @@ func (a *Api) GetCurrentBranchByPlanId(projectId string, req shared.GetCurrentBr
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -311,7 +343,7 @@ func (a *Api) GetCurrentBranchByPlanId(projectId string, req shared.GetCurrentBr
 }
 
 func (a *Api) CreatePlan(projectId string, req shared.CreatePlanRequest) (*shared.CreatePlanResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/projects/%s/plans", getApiHost(), projectId)
+	serverUrl := fmt.Sprintf("%s/projects/%s/plans", GetApiHost(), projectId)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -325,7 +357,7 @@ func (a *Api) CreatePlan(projectId string, req shared.CreatePlanRequest) (*share
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreatePlan(projectId, req)
@@ -343,7 +375,7 @@ func (a *Api) CreatePlan(projectId string, req shared.CreatePlanRequest) (*share
 }
 
 func (a *Api) GetPlan(planId string) (*shared.Plan, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s", GetApiHost(), planId)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -354,7 +386,7 @@ func (a *Api) GetPlan(planId string) (*shared.Plan, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.GetPlan(planId)
@@ -372,7 +404,7 @@ func (a *Api) GetPlan(planId string) (*shared.Plan, *shared.ApiError) {
 }
 
 func (a *Api) DeletePlan(planId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s", GetApiHost(), planId)
 
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
@@ -387,7 +419,7 @@ func (a *Api) DeletePlan(planId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -400,7 +432,7 @@ func (a *Api) DeletePlan(planId string) *shared.ApiError {
 }
 
 func (a *Api) DeleteAllPlans(projectId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/projects/%s/plans", getApiHost(), projectId)
+	serverUrl := fmt.Sprintf("%s/projects/%s/plans", GetApiHost(), projectId)
 
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
@@ -415,7 +447,7 @@ func (a *Api) DeleteAllPlans(projectId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 
@@ -430,7 +462,7 @@ func (a *Api) DeleteAllPlans(projectId string) *shared.ApiError {
 
 func (a *Api) TellPlan(planId, branch string, req shared.TellPlanRequest, onStream types.OnStreamPlan) *shared.ApiError {
 
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/tell", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/tell", GetApiHost(), planId, branch)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return &shared.ApiError{Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -456,7 +488,7 @@ func (a *Api) TellPlan(planId, branch string, req shared.TellPlanRequest, onStre
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 
@@ -481,7 +513,7 @@ func (a *Api) BuildPlan(planId, branch string, req shared.BuildPlanRequest, onSt
 
 	log.Println("Calling BuildPlan")
 
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/build", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/build", GetApiHost(), planId, branch)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return &shared.ApiError{Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -509,7 +541,7 @@ func (a *Api) BuildPlan(planId, branch string, req shared.BuildPlanRequest, onSt
 		log.Println("Error response from build plan", resp.StatusCode)
 
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 
@@ -531,7 +563,7 @@ func (a *Api) BuildPlan(planId, branch string, req shared.BuildPlanRequest, onSt
 }
 
 func (a *Api) RespondMissingFile(planId, branch string, req shared.RespondMissingFileRequest) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/respond_missing_file", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/respond_missing_file", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -551,7 +583,7 @@ func (a *Api) RespondMissingFile(planId, branch string, req shared.RespondMissin
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 
@@ -566,7 +598,7 @@ func (a *Api) RespondMissingFile(planId, branch string, req shared.RespondMissin
 }
 
 func (a *Api) ConnectPlan(planId, branch string, onStream types.OnStreamPlan) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/connect", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/connect", GetApiHost(), planId, branch)
 
 	req, err := http.NewRequest(http.MethodPatch, serverUrl, nil)
 	if err != nil {
@@ -580,7 +612,7 @@ func (a *Api) ConnectPlan(planId, branch string, onStream types.OnStreamPlan) *s
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 
@@ -596,10 +628,10 @@ func (a *Api) ConnectPlan(planId, branch string, onStream types.OnStreamPlan) *s
 	return nil
 }
 
-func (a *Api) StopPlan(planId, branch string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/stop", getApiHost(), planId, branch)
+func (a *Api) StopPlan(ctx context.Context, planId, branch string) *shared.ApiError {
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/stop", GetApiHost(), planId, branch)
 
-	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, serverUrl, nil)
 	if err != nil {
 		return &shared.ApiError{Msg: fmt.Sprintf("error creating request: %v", err)}
 	}
@@ -612,10 +644,10 @@ func (a *Api) StopPlan(planId, branch string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
-			return a.StopPlan(planId, branch)
+			return a.StopPlan(ctx, planId, branch)
 		}
 		return apiErr
 	}
@@ -624,7 +656,20 @@ func (a *Api) StopPlan(planId, branch string) *shared.ApiError {
 }
 
 func (a *Api) GetCurrentPlanState(planId, branch string) (*shared.CurrentPlanState, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/current_plan", getApiHost(), planId, branch)
+	return a.getCurrentPlanState(planId, branch, "")
+}
+
+func (a *Api) GetCurrentPlanStateAtSha(planId, sha string) (*shared.CurrentPlanState, *shared.ApiError) {
+	return a.getCurrentPlanState(planId, "", sha)
+}
+
+func (a *Api) getCurrentPlanState(planId, branch, sha string) (*shared.CurrentPlanState, *shared.ApiError) {
+	var serverUrl string
+	if sha != "" {
+		serverUrl = fmt.Sprintf("%s/plans/%s/current_plan/%s", GetApiHost(), planId, sha)
+	} else {
+		serverUrl = fmt.Sprintf("%s/plans/%s/%s/current_plan", GetApiHost(), planId, branch)
+	}
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -634,10 +679,10 @@ func (a *Api) GetCurrentPlanState(planId, branch string) (*shared.CurrentPlanSta
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
-			return a.GetCurrentPlanState(planId, branch)
+			return a.getCurrentPlanState(planId, branch, sha)
 		}
 		return nil, apiErr
 	}
@@ -652,7 +697,7 @@ func (a *Api) GetCurrentPlanState(planId, branch string) (*shared.CurrentPlanSta
 }
 
 func (a *Api) ApplyPlan(planId, branch string, req shared.ApplyPlanRequest) (string, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/apply", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/apply", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -673,7 +718,7 @@ func (a *Api) ApplyPlan(planId, branch string, req shared.ApplyPlanRequest) (str
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -692,7 +737,7 @@ func (a *Api) ApplyPlan(planId, branch string, req shared.ApplyPlanRequest) (str
 }
 
 func (a *Api) ArchivePlan(planId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/archive", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s/archive", GetApiHost(), planId)
 
 	req, err := http.NewRequest(http.MethodPatch, serverUrl, nil)
 	if err != nil {
@@ -707,7 +752,7 @@ func (a *Api) ArchivePlan(planId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -720,7 +765,7 @@ func (a *Api) ArchivePlan(planId string) *shared.ApiError {
 }
 
 func (a *Api) UnarchivePlan(planId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/unarchive", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s/unarchive", GetApiHost(), planId)
 
 	req, err := http.NewRequest(http.MethodPatch, serverUrl, nil)
 	if err != nil {
@@ -735,7 +780,7 @@ func (a *Api) UnarchivePlan(planId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -748,7 +793,7 @@ func (a *Api) UnarchivePlan(planId string) *shared.ApiError {
 }
 
 func (a *Api) RenamePlan(planId string, name string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/rename", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s/rename", GetApiHost(), planId)
 
 	reqBytes, err := json.Marshal(shared.RenamePlanRequest{Name: name})
 	if err != nil {
@@ -774,7 +819,7 @@ func (a *Api) RenamePlan(planId string, name string) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -787,7 +832,7 @@ func (a *Api) RenamePlan(planId string, name string) *shared.ApiError {
 }
 
 func (a *Api) RejectAllChanges(planId, branch string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_all", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_all", GetApiHost(), planId, branch)
 
 	req, err := http.NewRequest(http.MethodPatch, serverUrl, nil)
 	if err != nil {
@@ -802,7 +847,7 @@ func (a *Api) RejectAllChanges(planId, branch string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
@@ -815,7 +860,7 @@ func (a *Api) RejectAllChanges(planId, branch string) *shared.ApiError {
 }
 
 func (a *Api) RejectFile(planId, branch, filePath string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_file", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_file", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(shared.RejectFileRequest{FilePath: filePath})
 
@@ -837,7 +882,7 @@ func (a *Api) RejectFile(planId, branch, filePath string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
 			a.RejectFile(planId, branch, filePath)
@@ -849,7 +894,7 @@ func (a *Api) RejectFile(planId, branch, filePath string) *shared.ApiError {
 }
 
 func (a *Api) RejectFiles(planId, branch string, paths []string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_files", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/reject_files", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(shared.RejectFilesRequest{Paths: paths})
 
@@ -871,7 +916,7 @@ func (a *Api) RejectFiles(planId, branch string, paths []string) *shared.ApiErro
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		didRefresh, apiErr := refreshTokenIfNeeded(apiErr)
 		if didRefresh {
 			a.RejectFiles(planId, branch, paths)
@@ -883,7 +928,7 @@ func (a *Api) RejectFiles(planId, branch string, paths []string) *shared.ApiErro
 }
 
 func (a *Api) LoadContext(planId, branch string, req shared.LoadContextRequest) (*shared.LoadContextResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", GetApiHost(), planId, branch)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -898,7 +943,7 @@ func (a *Api) LoadContext(planId, branch string, req shared.LoadContextRequest) 
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.LoadContext(planId, branch, req)
@@ -916,7 +961,7 @@ func (a *Api) LoadContext(planId, branch string, req shared.LoadContextRequest) 
 }
 
 func (a *Api) UpdateContext(planId, branch string, req shared.UpdateContextRequest) (*shared.UpdateContextResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -940,7 +985,7 @@ func (a *Api) UpdateContext(planId, branch string, req shared.UpdateContextReque
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.UpdateContext(planId, branch, req)
@@ -958,7 +1003,7 @@ func (a *Api) UpdateContext(planId, branch string, req shared.UpdateContextReque
 }
 
 func (a *Api) DeleteContext(planId, branch string, req shared.DeleteContextRequest) (*shared.DeleteContextResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", GetApiHost(), planId, branch)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -978,7 +1023,7 @@ func (a *Api) DeleteContext(planId, branch string, req shared.DeleteContextReque
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.DeleteContext(planId, branch, req)
@@ -996,7 +1041,7 @@ func (a *Api) DeleteContext(planId, branch string, req shared.DeleteContextReque
 }
 
 func (a *Api) ListContext(planId, branch string) ([]*shared.Context, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context", GetApiHost(), planId, branch)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1006,7 +1051,7 @@ func (a *Api) ListContext(planId, branch string) ([]*shared.Context, *shared.Api
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListContext(planId, branch)
@@ -1023,8 +1068,36 @@ func (a *Api) ListContext(planId, branch string) ([]*shared.Context, *shared.Api
 	return contexts, nil
 }
 
+func (a *Api) LoadCachedFileMap(planId, branch string, req shared.LoadCachedFileMapRequest) (*shared.LoadCachedFileMapResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/load_cached_file_map", GetApiHost(), planId, branch)
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	resp, err := authenticatedFastClient.Post(serverUrl, "application/json", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		return nil, apiErr
+	}
+
+	var loadResp shared.LoadCachedFileMapResponse
+	err = json.NewDecoder(resp.Body).Decode(&loadResp)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return &loadResp, nil
+}
+
 func (a *Api) ListConvo(planId, branch string) ([]*shared.ConvoMessage, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/convo", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/convo", GetApiHost(), planId, branch)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1034,7 +1107,7 @@ func (a *Api) ListConvo(planId, branch string) ([]*shared.ConvoMessage, *shared.
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListConvo(planId, branch)
@@ -1052,7 +1125,7 @@ func (a *Api) ListConvo(planId, branch string) ([]*shared.ConvoMessage, *shared.
 }
 
 func (a *Api) GetPlanStatus(planId, branch string) (string, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/status", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/status", GetApiHost(), planId, branch)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1062,7 +1135,7 @@ func (a *Api) GetPlanStatus(planId, branch string) (string, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.GetPlanStatus(planId, branch)
@@ -1080,7 +1153,7 @@ func (a *Api) GetPlanStatus(planId, branch string) (string, *shared.ApiError) {
 }
 
 func (a *Api) GetPlanDiffs(planId, branch string, plain bool) (string, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/diffs", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/diffs", GetApiHost(), planId, branch)
 
 	if plain {
 		serverUrl += "?plain=true"
@@ -1094,7 +1167,7 @@ func (a *Api) GetPlanDiffs(planId, branch string, plain bool) (string, *shared.A
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.GetPlanDiffs(planId, branch, plain)
@@ -1112,7 +1185,7 @@ func (a *Api) GetPlanDiffs(planId, branch string, plain bool) (string, *shared.A
 }
 
 func (a *Api) ListLogs(planId, branch string) (*shared.LogResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/logs", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/logs", GetApiHost(), planId, branch)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1123,7 +1196,7 @@ func (a *Api) ListLogs(planId, branch string) (*shared.LogResponse, *shared.ApiE
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListLogs(planId, branch)
@@ -1141,7 +1214,7 @@ func (a *Api) ListLogs(planId, branch string) (*shared.LogResponse, *shared.ApiE
 }
 
 func (a *Api) RewindPlan(planId, branch string, req shared.RewindPlanRequest) (*shared.RewindPlanResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/rewind", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/rewind", GetApiHost(), planId, branch)
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -1162,7 +1235,7 @@ func (a *Api) RewindPlan(planId, branch string, req shared.RewindPlanRequest) (*
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.RewindPlan(planId, branch, req)
@@ -1182,7 +1255,7 @@ func (a *Api) RewindPlan(planId, branch string, req shared.RewindPlanRequest) (*
 func (a *Api) SignIn(req shared.SignInRequest, customHost string) (*shared.SessionResponse, *shared.ApiError) {
 	host := customHost
 	if host == "" {
-		host = cloudApiHost
+		host = CloudApiHost
 	}
 	serverUrl := host + "/accounts/sign_in"
 	reqBytes, err := json.Marshal(req)
@@ -1198,7 +1271,7 @@ func (a *Api) SignIn(req shared.SignInRequest, customHost string) (*shared.Sessi
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		return nil, apiErr
 	}
 
@@ -1214,7 +1287,7 @@ func (a *Api) SignIn(req shared.SignInRequest, customHost string) (*shared.Sessi
 func (a *Api) CreateAccount(req shared.CreateAccountRequest, customHost string) (*shared.SessionResponse, *shared.ApiError) {
 	host := customHost
 	if host == "" {
-		host = cloudApiHost
+		host = CloudApiHost
 	}
 	serverUrl := host + "/accounts"
 	reqBytes, err := json.Marshal(req)
@@ -1230,35 +1303,7 @@ func (a *Api) CreateAccount(req shared.CreateAccountRequest, customHost string) 
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
-		return nil, apiErr
-	}
-
-	var sessionResponse shared.SessionResponse
-	err = json.NewDecoder(resp.Body).Decode(&sessionResponse)
-	if err != nil {
-		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
-	}
-
-	return &sessionResponse, nil
-}
-
-func (a *Api) ConvertTrial(req shared.ConvertTrialRequest) (*shared.SessionResponse, *shared.ApiError) {
-	serverUrl := getApiHost() + "/accounts/convert_trial"
-	reqBytes, err := json.Marshal(req)
-	if err != nil {
-		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
-	}
-
-	resp, err := authenticatedFastClient.Post(serverUrl, "application/json", bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		return nil, apiErr
 	}
 
@@ -1272,7 +1317,7 @@ func (a *Api) ConvertTrial(req shared.ConvertTrialRequest) (*shared.SessionRespo
 }
 
 func (a *Api) CreateOrg(req shared.CreateOrgRequest) (*shared.CreateOrgResponse, *shared.ApiError) {
-	serverUrl := getApiHost() + "/orgs"
+	serverUrl := GetApiHost() + "/orgs"
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -1286,7 +1331,7 @@ func (a *Api) CreateOrg(req shared.CreateOrgRequest) (*shared.CreateOrgResponse,
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreateOrg(req)
@@ -1303,25 +1348,8 @@ func (a *Api) CreateOrg(req shared.CreateOrgRequest) (*shared.CreateOrgResponse,
 	return &createOrgResponse, nil
 }
 
-func (a *Api) GetOrgSession() *shared.ApiError {
-	serverUrl := getApiHost() + "/orgs/session"
-	resp, err := authenticatedFastClient.Get(serverUrl)
-	if err != nil {
-		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
-		return apiErr
-	}
-
-	return nil
-}
-
-func (a *Api) ListOrgs() ([]*shared.Org, *shared.ApiError) {
-	serverUrl := getApiHost() + "/orgs"
+func (a *Api) GetOrgSession() (*shared.Org, *shared.ApiError) {
+	serverUrl := GetApiHost() + "/orgs/session"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1330,7 +1358,36 @@ func (a *Api) ListOrgs() ([]*shared.Org, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetOrgSession()
+		}
+		return nil, apiErr
+	}
+
+	var org *shared.Org
+
+	err = json.NewDecoder(resp.Body).Decode(&org)
+
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return org, nil
+}
+
+func (a *Api) ListOrgs() ([]*shared.Org, *shared.ApiError) {
+	serverUrl := GetApiHost() + "/orgs"
+	resp, err := authenticatedFastClient.Get(serverUrl)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListOrgs()
@@ -1348,7 +1405,7 @@ func (a *Api) ListOrgs() ([]*shared.Org, *shared.ApiError) {
 }
 
 func (a *Api) DeleteUser(userId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/orgs/users/%s", getApiHost(), userId)
+	serverUrl := fmt.Sprintf("%s/orgs/users/%s", GetApiHost(), userId)
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
 		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
@@ -1362,7 +1419,7 @@ func (a *Api) DeleteUser(userId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.DeleteUser(userId)
@@ -1374,7 +1431,7 @@ func (a *Api) DeleteUser(userId string) *shared.ApiError {
 }
 
 func (a *Api) ListOrgRoles() ([]*shared.OrgRole, *shared.ApiError) {
-	serverUrl := getApiHost() + "/orgs/roles"
+	serverUrl := GetApiHost() + "/orgs/roles"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %s", err)}
@@ -1384,7 +1441,7 @@ func (a *Api) ListOrgRoles() ([]*shared.OrgRole, *shared.ApiError) {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListOrgRoles()
@@ -1402,7 +1459,7 @@ func (a *Api) ListOrgRoles() ([]*shared.OrgRole, *shared.ApiError) {
 }
 
 func (a *Api) InviteUser(req shared.InviteRequest) *shared.ApiError {
-	serverUrl := getApiHost() + "/invites"
+	serverUrl := GetApiHost() + "/invites"
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
@@ -1416,7 +1473,7 @@ func (a *Api) InviteUser(req shared.InviteRequest) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
@@ -1429,7 +1486,7 @@ func (a *Api) InviteUser(req shared.InviteRequest) *shared.ApiError {
 }
 
 func (a *Api) ListPendingInvites() ([]*shared.Invite, *shared.ApiError) {
-	serverUrl := getApiHost() + "/invites/pending"
+	serverUrl := GetApiHost() + "/invites/pending"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1438,7 +1495,7 @@ func (a *Api) ListPendingInvites() ([]*shared.Invite, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListPendingInvites()
@@ -1456,7 +1513,7 @@ func (a *Api) ListPendingInvites() ([]*shared.Invite, *shared.ApiError) {
 }
 
 func (a *Api) ListAcceptedInvites() ([]*shared.Invite, *shared.ApiError) {
-	serverUrl := getApiHost() + "/invites/accepted"
+	serverUrl := GetApiHost() + "/invites/accepted"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1465,7 +1522,7 @@ func (a *Api) ListAcceptedInvites() ([]*shared.Invite, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListAcceptedInvites()
@@ -1483,7 +1540,7 @@ func (a *Api) ListAcceptedInvites() ([]*shared.Invite, *shared.ApiError) {
 }
 
 func (a *Api) ListAllInvites() ([]*shared.Invite, *shared.ApiError) {
-	serverUrl := getApiHost() + "/invites/all"
+	serverUrl := GetApiHost() + "/invites/all"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1492,7 +1549,7 @@ func (a *Api) ListAllInvites() ([]*shared.Invite, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListAllInvites()
@@ -1510,7 +1567,7 @@ func (a *Api) ListAllInvites() ([]*shared.Invite, *shared.ApiError) {
 }
 
 func (a *Api) DeleteInvite(inviteId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/invites/%s", getApiHost(), inviteId)
+	serverUrl := fmt.Sprintf("%s/invites/%s", GetApiHost(), inviteId)
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
 		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
@@ -1524,7 +1581,7 @@ func (a *Api) DeleteInvite(inviteId string) *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
@@ -1539,7 +1596,7 @@ func (a *Api) DeleteInvite(inviteId string) *shared.ApiError {
 func (a *Api) CreateEmailVerification(email, customHost, userId string) (*shared.CreateEmailVerificationResponse, *shared.ApiError) {
 	host := customHost
 	if host == "" {
-		host = cloudApiHost
+		host = CloudApiHost
 	}
 	serverUrl := host + "/accounts/email_verifications"
 	req := shared.CreateEmailVerificationRequest{Email: email, UserId: userId}
@@ -1556,7 +1613,7 @@ func (a *Api) CreateEmailVerification(email, customHost, userId string) (*shared
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		return nil, handleApiError(resp, errorBody)
+		return nil, HandleApiError(resp, errorBody)
 	}
 
 	var verificationResponse shared.CreateEmailVerificationResponse
@@ -1568,8 +1625,36 @@ func (a *Api) CreateEmailVerification(email, customHost, userId string) (*shared
 	return &verificationResponse, nil
 }
 
+func (a *Api) CreateSignInCode() (string, *shared.ApiError) {
+	serverUrl := GetApiHost() + "/accounts/sign_in_codes"
+	resp, err := authenticatedFastClient.Post(serverUrl, "application/json", nil)
+	if err != nil {
+		return "", &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.CreateSignInCode()
+		}
+		return "", apiErr
+	}
+
+	var signInCode string
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error reading response body: %v", err)}
+	}
+	signInCode = string(body)
+
+	return signInCode, nil
+}
+
 func (a *Api) SignOut() *shared.ApiError {
-	serverUrl := getApiHost() + "/accounts/sign_out"
+	serverUrl := GetApiHost() + "/accounts/sign_out"
 
 	req, err := http.NewRequest(http.MethodPost, serverUrl, nil)
 	if err != nil {
@@ -1584,14 +1669,14 @@ func (a *Api) SignOut() *shared.ApiError {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		return handleApiError(resp, errorBody)
+		return HandleApiError(resp, errorBody)
 	}
 
 	return nil
 }
 
 func (a *Api) ListUsers() (*shared.ListUsersResponse, *shared.ApiError) {
-	serverUrl := getApiHost() + "/users"
+	serverUrl := GetApiHost() + "/users"
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1600,7 +1685,7 @@ func (a *Api) ListUsers() (*shared.ListUsersResponse, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListUsers()
@@ -1618,7 +1703,7 @@ func (a *Api) ListUsers() (*shared.ListUsersResponse, *shared.ApiError) {
 }
 
 func (a *Api) ListBranches(planId string) ([]*shared.Branch, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/branches", getApiHost(), planId)
+	serverUrl := fmt.Sprintf("%s/plans/%s/branches", GetApiHost(), planId)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1629,7 +1714,7 @@ func (a *Api) ListBranches(planId string) ([]*shared.Branch, *shared.ApiError) {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListBranches(planId)
@@ -1647,7 +1732,7 @@ func (a *Api) ListBranches(planId string) ([]*shared.Branch, *shared.ApiError) {
 }
 
 func (a *Api) CreateBranch(planId, branch string, req shared.CreateBranchRequest) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/branches", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/branches", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -1663,7 +1748,7 @@ func (a *Api) CreateBranch(planId, branch string, req shared.CreateBranchRequest
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreateBranch(planId, branch, req)
@@ -1675,7 +1760,7 @@ func (a *Api) CreateBranch(planId, branch string, req shared.CreateBranchRequest
 }
 
 func (a *Api) DeleteBranch(planId, branch string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/plans/%s/branches/%s", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/branches/%s", GetApiHost(), planId, branch)
 
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
@@ -1691,7 +1776,7 @@ func (a *Api) DeleteBranch(planId, branch string) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.DeleteBranch(planId, branch)
@@ -1703,7 +1788,7 @@ func (a *Api) DeleteBranch(planId, branch string) *shared.ApiError {
 }
 
 func (a *Api) GetSettings(planId, branch string) (*shared.PlanSettings, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/settings", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/settings", GetApiHost(), planId, branch)
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 
@@ -1714,7 +1799,7 @@ func (a *Api) GetSettings(planId, branch string) (*shared.PlanSettings, *shared.
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.GetSettings(planId, branch)
@@ -1732,7 +1817,7 @@ func (a *Api) GetSettings(planId, branch string) (*shared.PlanSettings, *shared.
 }
 
 func (a *Api) UpdateSettings(planId, branch string, req shared.UpdateSettingsRequest) (*shared.UpdateSettingsResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/plans/%s/%s/settings", getApiHost(), planId, branch)
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/settings", GetApiHost(), planId, branch)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -1756,7 +1841,7 @@ func (a *Api) UpdateSettings(planId, branch string, req shared.UpdateSettingsReq
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.UpdateSettings(planId, branch, req)
@@ -1775,7 +1860,7 @@ func (a *Api) UpdateSettings(planId, branch string, req shared.UpdateSettingsReq
 }
 
 func (a *Api) GetOrgDefaultSettings() (*shared.PlanSettings, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/default_settings", getApiHost())
+	serverUrl := fmt.Sprintf("%s/default_settings", GetApiHost())
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 
@@ -1786,7 +1871,7 @@ func (a *Api) GetOrgDefaultSettings() (*shared.PlanSettings, *shared.ApiError) {
 
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.GetOrgDefaultSettings()
@@ -1804,7 +1889,7 @@ func (a *Api) GetOrgDefaultSettings() (*shared.PlanSettings, *shared.ApiError) {
 }
 
 func (a *Api) UpdateOrgDefaultSettings(req shared.UpdateSettingsRequest) (*shared.UpdateSettingsResponse, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/default_settings", getApiHost())
+	serverUrl := fmt.Sprintf("%s/default_settings", GetApiHost())
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -1828,7 +1913,7 @@ func (a *Api) UpdateOrgDefaultSettings(req shared.UpdateSettingsRequest) (*share
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.UpdateOrgDefaultSettings(req)
@@ -1843,11 +1928,132 @@ func (a *Api) UpdateOrgDefaultSettings(req shared.UpdateSettingsRequest) (*share
 	}
 
 	return &updateRes, nil
+}
 
+func (a *Api) GetPlanConfig(planId string) (*shared.PlanConfig, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/plans/%s/config", GetApiHost(), planId)
+
+	resp, err := authenticatedFastClient.Get(serverUrl)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetPlanConfig(planId)
+		}
+		return nil, apiErr
+	}
+
+	var res shared.GetPlanConfigResponse
+	err = json.NewDecoder(resp.Body).Decode(&res)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return res.Config, nil
+}
+
+func (a *Api) UpdatePlanConfig(planId string, req shared.UpdatePlanConfigRequest) *shared.ApiError {
+	serverUrl := fmt.Sprintf("%s/plans/%s/config", GetApiHost(), planId)
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	request, err := http.NewRequest(http.MethodPut, serverUrl, bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	resp, err := authenticatedFastClient.Do(request)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.UpdatePlanConfig(planId, req)
+		}
+		return apiErr
+	}
+
+	return nil
+}
+
+func (a *Api) GetDefaultPlanConfig() (*shared.PlanConfig, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/default_plan_config", GetApiHost())
+
+	resp, err := authenticatedFastClient.Get(serverUrl)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetDefaultPlanConfig()
+		}
+		return nil, apiErr
+	}
+
+	var res shared.GetDefaultPlanConfigResponse
+	err = json.NewDecoder(resp.Body).Decode(&res)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return res.Config, nil
+}
+
+func (a *Api) UpdateDefaultPlanConfig(req shared.UpdateDefaultPlanConfigRequest) *shared.ApiError {
+	serverUrl := fmt.Sprintf("%s/default_plan_config", GetApiHost())
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	request, err := http.NewRequest(http.MethodPut, serverUrl, bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	resp, err := authenticatedFastClient.Do(request)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.UpdateDefaultPlanConfig(req)
+		}
+		return apiErr
+	}
+
+	return nil
 }
 
 func (a *Api) CreateCustomModel(model *shared.AvailableModel) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/custom_models", getApiHost())
+	serverUrl := fmt.Sprintf("%s/custom_models", GetApiHost())
 	body, err := json.Marshal(model)
 	if err != nil {
 		return &shared.ApiError{Msg: "Failed to marshal model"}
@@ -1862,7 +2068,7 @@ func (a *Api) CreateCustomModel(model *shared.AvailableModel) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreateCustomModel(model)
@@ -1874,7 +2080,7 @@ func (a *Api) CreateCustomModel(model *shared.AvailableModel) *shared.ApiError {
 }
 
 func (a *Api) ListCustomModels() ([]*shared.AvailableModel, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/custom_models", getApiHost())
+	serverUrl := fmt.Sprintf("%s/custom_models", GetApiHost())
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
 		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
@@ -1884,7 +2090,7 @@ func (a *Api) ListCustomModels() ([]*shared.AvailableModel, *shared.ApiError) {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListCustomModels()
@@ -1902,7 +2108,7 @@ func (a *Api) ListCustomModels() ([]*shared.AvailableModel, *shared.ApiError) {
 }
 
 func (a *Api) DeleteAvailableModel(modelId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/custom_models/%s", getApiHost(), modelId)
+	serverUrl := fmt.Sprintf("%s/custom_models/%s", GetApiHost(), modelId)
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
 		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
@@ -1917,7 +2123,7 @@ func (a *Api) DeleteAvailableModel(modelId string) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.DeleteAvailableModel(modelId)
@@ -1928,8 +2134,40 @@ func (a *Api) DeleteAvailableModel(modelId string) *shared.ApiError {
 	return nil
 }
 
+func (a *Api) UpdateCustomModel(model *shared.AvailableModel) *shared.ApiError {
+	serverUrl := fmt.Sprintf("%s/custom_models/%s", GetApiHost(), model.Id)
+	body, err := json.Marshal(model)
+	if err != nil {
+		return &shared.ApiError{Msg: "Failed to marshal model"}
+	}
+
+	req, err := http.NewRequest(http.MethodPut, serverUrl, bytes.NewBuffer(body))
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := authenticatedFastClient.Do(req)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.UpdateCustomModel(model)
+		}
+		return apiErr
+	}
+
+	return nil
+}
+
 func (a *Api) CreateModelPack(set *shared.ModelPack) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/model_sets", getApiHost())
+	serverUrl := fmt.Sprintf("%s/model_sets", GetApiHost())
 	body, err := json.Marshal(set)
 	if err != nil {
 		return &shared.ApiError{Msg: "Failed to marshal model pack"}
@@ -1944,7 +2182,7 @@ func (a *Api) CreateModelPack(set *shared.ModelPack) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.CreateModelPack(set)
@@ -1957,7 +2195,7 @@ func (a *Api) CreateModelPack(set *shared.ModelPack) *shared.ApiError {
 }
 
 func (a *Api) ListModelPacks() ([]*shared.ModelPack, *shared.ApiError) {
-	serverUrl := fmt.Sprintf("%s/model_sets", getApiHost())
+	serverUrl := fmt.Sprintf("%s/model_sets", GetApiHost())
 
 	resp, err := authenticatedFastClient.Get(serverUrl)
 	if err != nil {
@@ -1968,7 +2206,7 @@ func (a *Api) ListModelPacks() ([]*shared.ModelPack, *shared.ApiError) {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.ListModelPacks()
@@ -1987,7 +2225,7 @@ func (a *Api) ListModelPacks() ([]*shared.ModelPack, *shared.ApiError) {
 }
 
 func (a *Api) DeleteModelPack(setId string) *shared.ApiError {
-	serverUrl := fmt.Sprintf("%s/model_sets/%s", getApiHost(), setId)
+	serverUrl := fmt.Sprintf("%s/model_sets/%s", GetApiHost(), setId)
 
 	req, err := http.NewRequest(http.MethodDelete, serverUrl, nil)
 	if err != nil {
@@ -2003,7 +2241,7 @@ func (a *Api) DeleteModelPack(setId string) *shared.ApiError {
 	if resp.StatusCode >= 400 {
 		errorBody, _ := io.ReadAll(resp.Body)
 
-		apiErr := handleApiError(resp, errorBody)
+		apiErr := HandleApiError(resp, errorBody)
 		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
 		if tokenRefreshed {
 			return a.DeleteModelPack(setId)
@@ -2012,4 +2250,234 @@ func (a *Api) DeleteModelPack(setId string) *shared.ApiError {
 	}
 
 	return nil
+}
+
+func (a *Api) UpdateModelPack(set *shared.ModelPack) *shared.ApiError {
+	serverUrl := fmt.Sprintf("%s/model_sets/%s", GetApiHost(), set.Id)
+	body, err := json.Marshal(set)
+	if err != nil {
+		return &shared.ApiError{Msg: "Failed to marshal model pack"}
+	}
+
+	req, err := http.NewRequest(http.MethodPut, serverUrl, bytes.NewBuffer(body))
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := authenticatedFastClient.Do(req)
+	if err != nil {
+		return &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.UpdateModelPack(set)
+		}
+		return apiErr
+	}
+
+	return nil
+}
+
+func (a *Api) GetCreditsTransactions(pageSize, pageNum int, req shared.CreditsLogRequest) (*shared.CreditsLogResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/billing/credits_transactions?size=%d&page=%d", GetApiHost(), pageSize, pageNum)
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	resp, err := authenticatedFastClient.Post(serverUrl, "application/json", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetCreditsTransactions(pageSize, pageNum, req)
+		}
+		return nil, apiErr
+	}
+
+	var res *shared.CreditsLogResponse
+	err = json.NewDecoder(resp.Body).Decode(&res)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return res, nil
+}
+
+func (a *Api) GetCreditsSummary(req shared.CreditsLogRequest) (*shared.CreditsSummaryResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/billing/credits_summary", GetApiHost())
+
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	resp, err := authenticatedFastClient.Post(serverUrl, "application/json", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetCreditsSummary(req)
+		}
+		return nil, apiErr
+	}
+
+	var res *shared.CreditsSummaryResponse
+	err = json.NewDecoder(resp.Body).Decode(&res)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return res, nil
+}
+
+func (a *Api) GetFileMap(req shared.GetFileMapRequest) (*shared.GetFileMapResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/file_map", GetApiHost())
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	resp, err := authenticatedSlowClient.Post(serverUrl, "application/json", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetFileMap(req)
+		}
+		return nil, apiErr
+	}
+
+	var respBody shared.GetFileMapResponse
+	err = json.NewDecoder(resp.Body).Decode(&respBody)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return &respBody, nil
+}
+
+func (a *Api) GetContextBody(planId, branch, contextId string) (*shared.GetContextBodyResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/context/%s/body", GetApiHost(), planId, branch, contextId)
+
+	resp, err := authenticatedFastClient.Get(serverUrl)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetContextBody(planId, branch, contextId)
+		}
+		return nil, apiErr
+	}
+
+	var respBody shared.GetContextBodyResponse
+	err = json.NewDecoder(resp.Body).Decode(&respBody)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return &respBody, nil
+}
+
+func (a *Api) AutoLoadContext(ctx context.Context, planId, branch string, req shared.LoadContextRequest) (*shared.LoadContextResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/auto_load_context", GetApiHost(), planId, branch)
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error marshalling request: %v", err)}
+	}
+
+	// Create a new request with context
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", serverUrl, bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error creating request: %v", err)}
+	}
+
+	// Set the content type header
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Use the slow client since we may be uploading relatively large files
+	resp, err := authenticatedSlowClient.Do(httpReq)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.LoadContext(planId, branch, req)
+		}
+		return nil, apiErr
+	}
+
+	var loadContextResponse shared.LoadContextResponse
+	err = json.NewDecoder(resp.Body).Decode(&loadContextResponse)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return &loadContextResponse, nil
+}
+
+func (a *Api) GetBuildStatus(planId, branch string) (*shared.GetBuildStatusResponse, *shared.ApiError) {
+	serverUrl := fmt.Sprintf("%s/plans/%s/%s/build_status", GetApiHost(), planId, branch)
+
+	resp, err := authenticatedFastClient.Get(serverUrl)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error sending request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		apiErr := HandleApiError(resp, errorBody)
+		tokenRefreshed, apiErr := refreshTokenIfNeeded(apiErr)
+		if tokenRefreshed {
+			return a.GetBuildStatus(planId, branch)
+		}
+		return nil, apiErr
+	}
+
+	var respBody shared.GetBuildStatusResponse
+	err = json.NewDecoder(resp.Body).Decode(&respBody)
+	if err != nil {
+		return nil, &shared.ApiError{Type: shared.ApiErrorTypeOther, Msg: fmt.Sprintf("error decoding response: %v", err)}
+	}
+
+	return &respBody, nil
 }

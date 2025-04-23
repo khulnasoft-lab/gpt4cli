@@ -2,43 +2,17 @@ package auth
 
 import (
 	"fmt"
-	"gpt4cli/term"
-	"gpt4cli/types"
+	"gpt4cli-cli/term"
+
+	shared "gpt4cli-shared"
 
 	"github.com/fatih/color"
-	"github.com/khulnasoft/gpt4cli/shared"
 )
 
 const (
-	AuthFreeTrialOption = "Start an anonymous trial on Gpt4cli Cloud (no email required)"
-	AuthAccountOption   = "Sign in, accept an invite, or create an account"
+	AuthTrialOption   = "Start a trial on Gpt4cli Cloud"
+	AuthAccountOption = "Sign in, accept an invite, or create an account"
 )
-
-func promptInitialAuth() error {
-	selected, err := term.SelectFromList("👋 Hey there!\nIt looks like this is your first time using Gpt4cli on this computer.\nWhat would you like to do?", []string{AuthFreeTrialOption, AuthAccountOption})
-
-	if err != nil {
-		return fmt.Errorf("error selecting auth option: %v", err)
-	}
-
-	switch selected {
-	case AuthFreeTrialOption:
-		err = startTrial()
-
-		if err != nil {
-			return fmt.Errorf("error starting trial: %v", err)
-		}
-
-	case AuthAccountOption:
-		err = SelectOrSignInOrCreate()
-
-		if err != nil {
-			return fmt.Errorf("error selecting or signing in to account: %v", err)
-		}
-	}
-
-	return nil
-}
 
 const AddAccountOption = "Add another account"
 
@@ -54,6 +28,8 @@ func SelectOrSignInOrCreate() error {
 		if err != nil {
 			return fmt.Errorf("error signing in to new account: %v", err)
 		}
+
+		return nil
 	}
 
 	var options []string
@@ -79,7 +55,7 @@ func SelectOrSignInOrCreate() error {
 		return nil
 	}
 
-	var selected *types.ClientAccount
+	var selected *shared.ClientAccount
 	for i, opt := range options {
 		if selectedOpt == opt {
 			selected = accounts[i]
@@ -91,8 +67,10 @@ func SelectOrSignInOrCreate() error {
 		return fmt.Errorf("error selecting account: account not found")
 	}
 
-	setAuth(&types.ClientAuth{
-		ClientAccount: *selected,
+	selectedAuth := *selected
+
+	setAuth(&shared.ClientAuth{
+		ClientAccount: selectedAuth,
 	})
 
 	term.StartSpinner("")
@@ -103,23 +81,25 @@ func SelectOrSignInOrCreate() error {
 		return fmt.Errorf("error listing orgs: %v", apiErr.Msg)
 	}
 
-	orgId, orgName, err := resolveOrgAuth(orgs)
+	org, err := resolveOrgAuth(orgs, selectedAuth.IsLocalMode)
 
 	if err != nil {
 		return fmt.Errorf("error resolving org: %v", err)
 	}
 
-	err = setAuth(&types.ClientAuth{
-		ClientAccount: *selected,
-		OrgId:         orgId,
-		OrgName:       orgName,
+	err = setAuth(&shared.ClientAuth{
+		ClientAccount:        *selected,
+		OrgId:                org.Id,
+		OrgName:              org.Name,
+		OrgIsTrial:           org.IsTrial,
+		IntegratedModelsMode: org.IntegratedModelsMode,
 	})
 
 	if err != nil {
 		return fmt.Errorf("error setting auth: %v", err)
 	}
 
-	apiErr = apiClient.GetOrgSession()
+	_, apiErr = apiClient.GetOrgSession()
 
 	if apiErr != nil {
 		return fmt.Errorf("error getting org session: %v", apiErr.Msg)
@@ -128,18 +108,58 @@ func SelectOrSignInOrCreate() error {
 	fmt.Printf("✅ Signed in as %s | Org: %s\n", color.New(color.Bold, term.ColorHiGreen).Sprintf("<%s> %s", Current.UserName, Current.Email), color.New(term.ColorHiCyan).Sprint(Current.OrgName))
 	fmt.Println()
 
-	term.PrintCmds("", "new", "plans")
+	if !term.IsRepl {
+		term.PrintCmds("", "")
+	}
+
+	return nil
+}
+
+func SignInWithCode(code, host string) error {
+	term.StartSpinner("")
+	res, apiErr := apiClient.SignIn(shared.SignInRequest{
+		Pin:          code,
+		IsSignInCode: true,
+	}, host)
+	term.StopSpinner()
+
+	if apiErr != nil {
+		return fmt.Errorf("error signing in: %v", apiErr.Msg)
+	}
+
+	return handleSignInResponse(res, host)
+}
+
+func promptInitialAuth() error {
+	selected, err := term.SelectFromList("👋 Hey there!\nIt looks like this is your first time using Gpt4cli on this computer.\nWhat would you like to do?", []string{AuthTrialOption, AuthAccountOption})
+
+	if err != nil {
+		return fmt.Errorf("error selecting auth option: %v", err)
+	}
+
+	switch selected {
+	case AuthTrialOption:
+		startTrial()
+
+	case AuthAccountOption:
+		err = SelectOrSignInOrCreate()
+
+		if err != nil {
+			return fmt.Errorf("error selecting or signing in to account: %v", err)
+		}
+	}
 
 	return nil
 }
 
 const (
 	SignInCloudOption = "Gpt4cli Cloud"
+	SignInLocalOption = "Local mode host"
 	SignInOtherOption = "Another host"
 )
 
 func promptSignInNewAccount() error {
-	selected, err := term.SelectFromList("Use Gpt4cli Cloud or another host?", []string{SignInCloudOption, SignInOtherOption})
+	selected, err := term.SelectFromList("Use Gpt4cli Cloud or another host?", []string{SignInCloudOption, SignInLocalOption, SignInOtherOption})
 
 	if err != nil {
 		return fmt.Errorf("error selecting sign in option: %v", err)
@@ -155,53 +175,73 @@ func promptSignInNewAccount() error {
 			return fmt.Errorf("error prompting email: %v", err)
 		}
 	} else {
-		host, err = term.GetRequiredUserStringInput("Host:")
+		if selected == SignInLocalOption {
+			host, err = term.GetRequiredUserStringInputWithDefault("Host:", "http://localhost:8099")
+		} else {
+			host, err = term.GetRequiredUserStringInput("Host:")
+		}
 
 		if err != nil {
 			return fmt.Errorf("error prompting host: %v", err)
 		}
 
-		email, err = term.GetRequiredUserStringInput("Your email:")
+		if selected == SignInLocalOption {
+			email = "local-admin@gpt4cli.khulnasoft.com"
+		} else {
+			email, err = term.GetRequiredUserStringInput("Your email:")
+		}
 
 		if err != nil {
 			return fmt.Errorf("error prompting email: %v", err)
 		}
 	}
 
-	hasAccount, pin, err := verifyEmail(email, host)
+	res, err := verifyEmail(email, host)
 
 	if err != nil {
 		return fmt.Errorf("error verifying email: %v", err)
 	}
 
-	if hasAccount {
-		err := signIn(email, pin, host)
+	if res.hasAccount {
+		err := signIn(email, res.pin, host)
 		if err != nil {
 			return fmt.Errorf("error signing in: %v", err)
 		}
 	} else {
-		err := createAccount(email, pin, host)
+		err := createAccount(email, res.pin, host, res.isLocalMode)
 		if err != nil {
 			return fmt.Errorf("error creating account: %v", err)
 		}
 	}
 
-	fmt.Printf("✅ Signed in as %s | Org: %s\n", color.New(color.Bold, term.ColorHiGreen).Sprintf("<%s> %s", Current.UserName, Current.Email), color.New(term.ColorHiCyan).Sprint(Current.OrgName))
-	fmt.Println()
-
-	term.PrintCmds("", "new", "plans")
+	if !term.IsRepl {
+		term.PrintCmds("", "")
+	}
 
 	return nil
 }
 
-func verifyEmail(email, host string) (bool, string, error) {
+type verifyEmailRes struct {
+	hasAccount  bool
+	isLocalMode bool
+	pin         string
+}
 
+func verifyEmail(email, host string) (*verifyEmailRes, error) {
 	term.StartSpinner("")
 	res, apiErr := apiClient.CreateEmailVerification(email, host, "")
 	term.StopSpinner()
 
 	if apiErr != nil {
-		return false, "", fmt.Errorf("error creating email verification: %v", apiErr.Msg)
+		return nil, fmt.Errorf("error creating email verification: %v", apiErr.Msg)
+	}
+
+	if res.IsLocalMode {
+		return &verifyEmailRes{
+			hasAccount:  res.HasAccount,
+			isLocalMode: true,
+			pin:         "",
+		}, nil
 	}
 
 	fmt.Println("✉️  You'll now receive a 6 character pin by email. It will be valid for 5 minutes.")
@@ -209,10 +249,14 @@ func verifyEmail(email, host string) (bool, string, error) {
 	pin, err := term.GetUserPasswordInput("Please enter your pin:")
 
 	if err != nil {
-		return false, "", fmt.Errorf("error prompting pin: %v", err)
+		return nil, fmt.Errorf("error prompting pin: %v", err)
 	}
 
-	return res.HasAccount, pin, nil
+	return &verifyEmailRes{
+		hasAccount:  res.HasAccount,
+		isLocalMode: false,
+		pin:         pin,
+	}, nil
 }
 
 func signIn(email, pin, host string) error {
@@ -227,15 +271,22 @@ func signIn(email, pin, host string) error {
 		return fmt.Errorf("error signing in: %v", apiErr.Msg)
 	}
 
-	err := setAuth(&types.ClientAuth{
-		ClientAccount: types.ClientAccount{
-			Email:    res.Email,
-			UserId:   res.UserId,
-			UserName: res.UserName,
-			Token:    res.Token,
-			IsTrial:  false,
-			IsCloud:  host == "",
-			Host:     host,
+	return handleSignInResponse(res, host)
+}
+
+func handleSignInResponse(res *shared.SessionResponse, host string) error {
+	isLocalMode := host != "" && res.IsLocalMode
+
+	err := setAuth(&shared.ClientAuth{
+		ClientAccount: shared.ClientAccount{
+			Email:       res.Email,
+			UserId:      res.UserId,
+			UserName:    res.UserName,
+			Token:       res.Token,
+			IsTrial:     false,
+			IsCloud:     host == "",
+			Host:        host,
+			IsLocalMode: isLocalMode,
 		},
 	})
 
@@ -243,14 +294,15 @@ func signIn(email, pin, host string) error {
 		return fmt.Errorf("error setting auth: %v", err)
 	}
 
-	orgId, orgName, err := resolveOrgAuth(res.Orgs)
+	org, err := resolveOrgAuth(res.Orgs, isLocalMode)
 
 	if err != nil {
 		return fmt.Errorf("error resolving org: %v", err)
 	}
 
-	Current.OrgId = orgId
-	Current.OrgName = orgName
+	Current.OrgId = org.Id
+	Current.OrgName = org.Name
+	Current.IntegratedModelsMode = org.IntegratedModelsMode
 
 	err = writeCurrentAuth()
 
@@ -264,12 +316,18 @@ func signIn(email, pin, host string) error {
 	return nil
 }
 
-func createAccount(email, pin, host string) error {
+func createAccount(email, pin, host string, isLocalMode bool) error {
+	var name string
 
-	name, err := term.GetUserStringInput("Your name:")
+	if isLocalMode {
+		name = "Local Admin"
+	} else {
+		var err error
+		name, err = term.GetUserStringInput("Your name:")
 
-	if err != nil {
-		return fmt.Errorf("error prompting name: %v", err)
+		if err != nil {
+			return fmt.Errorf("error prompting name: %v", err)
+		}
 	}
 
 	term.StartSpinner("🌟 Creating account...")
@@ -284,15 +342,20 @@ func createAccount(email, pin, host string) error {
 		return fmt.Errorf("error creating account: %v", apiErr.Msg)
 	}
 
-	err = setAuth(&types.ClientAuth{
-		ClientAccount: types.ClientAccount{
-			Email:    res.Email,
-			UserId:   res.UserId,
-			UserName: res.UserName,
-			Token:    res.Token,
-			IsTrial:  false,
-			IsCloud:  host == "",
-			Host:     host,
+	if res.IsLocalMode {
+		isLocalMode = true
+	}
+
+	err := setAuth(&shared.ClientAuth{
+		ClientAccount: shared.ClientAccount{
+			Email:       res.Email,
+			UserId:      res.UserId,
+			UserName:    res.UserName,
+			Token:       res.Token,
+			IsTrial:     false,
+			IsCloud:     host == "",
+			Host:        host,
+			IsLocalMode: isLocalMode,
 		},
 	})
 
@@ -300,20 +363,28 @@ func createAccount(email, pin, host string) error {
 		return fmt.Errorf("error setting auth: %v", err)
 	}
 
-	orgId, orgName, err := resolveOrgAuth(res.Orgs)
+	org, err := resolveOrgAuth(res.Orgs, isLocalMode)
 
 	if err != nil {
 		return fmt.Errorf("error resolving org: %v", err)
 	}
 
-	Current.OrgId = orgId
-	Current.OrgName = orgName
+	if org == nil {
+		return fmt.Errorf("no org selected")
+	}
+
+	Current.OrgId = org.Id
+	Current.OrgName = org.Name
+	Current.IntegratedModelsMode = org.IntegratedModelsMode
 
 	err = writeCurrentAuth()
 
 	if err != nil {
 		return fmt.Errorf("error writing auth: %v", err)
 	}
+
+	fmt.Printf("✅ Signed in as %s | Org: %s\n", color.New(color.Bold, term.ColorHiGreen).Sprintf("<%s> %s", Current.UserName, Current.Email), color.New(term.ColorHiCyan).Sprint(Current.OrgName))
+	fmt.Println()
 
 	return nil
 }

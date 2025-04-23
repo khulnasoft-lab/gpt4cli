@@ -1,16 +1,17 @@
 package handlers
 
 import (
-	"gpt4cli-server/db"
-	"gpt4cli-server/model"
 	"log"
 	"net/http"
-
-	"github.com/sashabaranov/go-openai"
+	"gpt4cli-server/db"
+	"gpt4cli-server/hooks"
+	"gpt4cli-server/model"
+	"gpt4cli-server/types"
 )
 
 type initClientsParams struct {
 	w           http.ResponseWriter
+	auth        *types.ServerAuth
 	apiKey      string
 	apiKeys     map[string]string
 	endpoint    string
@@ -19,19 +20,37 @@ type initClientsParams struct {
 	plan        *db.Plan
 }
 
-func initClients(params initClientsParams) map[string]*openai.Client {
+func initClients(params initClientsParams) map[string]model.ClientInfo {
 	w := params.w
 	apiKey := params.apiKey
 	apiKeys := params.apiKeys
-	openAIOrgId := params.openAIOrgId
 	plan := params.plan
+	var openAIOrgId string
+	var endpoint string
 
-	endpoint := params.openAIBase
-	if endpoint == "" {
-		endpoint = params.endpoint
+	hookResult, apiErr := hooks.ExecHook(hooks.GetIntegratedModels, hooks.HookParams{
+		Auth: params.auth,
+		Plan: params.plan,
+	})
+
+	if apiErr != nil {
+		log.Printf("Error getting integrated models: %v\n", apiErr)
+		http.Error(w, "Error getting integrated models", http.StatusInternalServerError)
+		return nil
 	}
-	if apiKeys == nil {
-		apiKeys = map[string]string{"OPENAI_API_KEY": apiKey}
+
+	if hookResult.GetIntegratedModelsResult != nil && hookResult.GetIntegratedModelsResult.IntegratedModelsMode {
+		apiKeys = hookResult.GetIntegratedModelsResult.ApiKeys
+	} else {
+		if apiKeys == nil {
+			apiKeys = map[string]string{"OPENAI_API_KEY": apiKey}
+		}
+
+		openAIOrgId = params.openAIOrgId
+		endpoint = params.openAIBase
+		if endpoint == "" {
+			endpoint = params.endpoint
+		}
 	}
 
 	planSettings, err := db.GetPlanSettings(plan, true)
@@ -45,6 +64,11 @@ func initClients(params initClientsParams) map[string]*openai.Client {
 	for envVar := range apiKeys {
 		if planSettings.ModelPack.Planner.BaseModelConfig.ApiKeyEnvVar == envVar {
 			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.Planner.BaseModelConfig.BaseUrl
+			continue
+		}
+
+		if planSettings.ModelPack.GetCoder().BaseModelConfig.ApiKeyEnvVar == envVar {
+			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetCoder().BaseModelConfig.BaseUrl
 			continue
 		}
 
@@ -73,15 +97,26 @@ func initClients(params initClientsParams) map[string]*openai.Client {
 			continue
 		}
 
-		if planSettings.ModelPack.GetVerifier().BaseModelConfig.ApiKeyEnvVar == envVar {
-			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetVerifier().BaseModelConfig.BaseUrl
+		if planSettings.ModelPack.GetWholeFileBuilder().BaseModelConfig.ApiKeyEnvVar == envVar {
+			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetWholeFileBuilder().BaseModelConfig.BaseUrl
 			continue
 		}
 
-		if planSettings.ModelPack.GetAutoFix().BaseModelConfig.ApiKeyEnvVar == envVar {
-			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetAutoFix().BaseModelConfig.BaseUrl
+		if planSettings.ModelPack.GetArchitect().BaseModelConfig.ApiKeyEnvVar == envVar {
+			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetArchitect().BaseModelConfig.BaseUrl
 			continue
 		}
+
+		if planSettings.ModelPack.GetCoder().BaseModelConfig.ApiKeyEnvVar == envVar {
+			endpointsByApiKeyEnvVar[envVar] = planSettings.ModelPack.GetCoder().BaseModelConfig.BaseUrl
+			continue
+		}
+	}
+
+	if len(apiKeys) == 0 {
+		log.Println("API key is required")
+		http.Error(w, "API key is required", http.StatusBadRequest)
+		return nil
 	}
 
 	clients := model.InitClients(apiKeys, endpointsByApiKeyEnvVar, endpoint, openAIOrgId)

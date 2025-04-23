@@ -4,10 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"gpt4cli/types"
 	"net/http"
+	"gpt4cli-cli/types"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
 )
 
 var apiClient types.ApiClient
@@ -33,7 +33,7 @@ func SetAuthHeader(req *http.Request) error {
 	}
 
 	// base64 encode
-	token := base64.StdEncoding.EncodeToString(bytes)
+	token := base64.URLEncoding.EncodeToString(bytes)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 

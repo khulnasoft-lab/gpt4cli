@@ -1,11 +1,13 @@
 ---
-sidebar_position: 8
+sidebar_position: 12
 sidebar_label: Background Tasks
 ---
 
 # Background Tasks
 
 Gpt4cli allows you to run tasks in the background, helping you work on multiple tasks in parallel.
+
+**Note:** in Gpt4cli v2, sending tasks to the background is disabled by default, because it's not compatible with automatic context loading. If you set a lower [autonomy level](./autonomy.md), you can use background tasks.
 
 ## Running a Task in the Background
 

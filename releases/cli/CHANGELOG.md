@@ -1,3 +1,177 @@
+## CLI Version 2.0.7+1
+- Small adjustment to previous release: in the REPL, select the first auto-complete suggestion on 'enter' if any suggestions are listed.
+
+## CLI Version 2.0.7
+- Better handling of partial or mistyped commands in the REPL. Rather than falling through to the AI model, a partial `\` command that matches only a single option will default to that command. If multiple commands could match, you'll be given a list of options. For input that begins with a `\` but doesn't match any command, there is now a confirmation step. This helps to prevent accidentally sending mistyped commands the model and burning tokens.
+
+## CLI Version 2.0.6
+- Timeout for 'gpt4cli browser' log capture command
+- Better failure handling for 'gpt4cli browser' command
+
+## CLI Version 2.0.5
+- Consolidated to a single model pack for Gemini 2.5 Pro Experimental: 'gemini-exp'. Use it with 'gpt4cli --gemini-exp' or '\set-model gemini-exp' in the REPL.
+- Prevent the '\send' command from being included in the prompt when using multi-line mode in the REPL.
+
+## CLI Version 2.0.4
+- **Models**
+  - Claude Sonnet 3.7 thinking is now available as a built-in model. Try the `reasoning` model pack for more challenging tasks.
+  - Gemini 2.5 pro (free/experimental version) is now available. Try the 'gemini-planner' or 'gemini-experimental' model packs to use it.
+  - DeepSeek V3 03-24 version is available as a built-in model and is now used in the `oss` pack in the in the the `coder` role. 
+  - OpenAI GPT 4.5 is available as a built-in model. It's not in any model packs so far due to rate limits and high cost, but is available to use via `set-model`
+  
+- **Debugging**
+  - Gpt4cli can now directly debug browser applications by catching errors and reading the console logs (requires Chrome).
+  - Enhanced signal handling and subprocess termination robustness for execution control.
+
+- **Model Packs**
+  - Added commands:
+    - `model-packs update`
+    - `model-packs show`
+
+- **Reliability**
+  - Implemented HTTP retry logic with exponential backoff for transient errors.    
+
+- **REPL**
+  - Fixed whitespace handling issues.
+  - Improved command execution flow.
+
+- **Installation**
+  - Clarified support for WSL-only environments.
+  - Better handling of sudo and alias creation on Linux.
+
+## CLI Version 2.0.3
+- Fix potential race condition/goroutine explosion/crash in context update.
+- Prevent crash with negative viewport height in stream tui.
+
+## CLI Version 2.0.2
+- Fixed bug where context auto-load would hang if there was no valid context to load (for example, if they're all directories, which is only discovered client-side, and which can't be auto-loaded)
+- Fixed bug where the build output would sometimes wrap incorrectly, causing the Plan Stream TUI to get out of sync with the build output.
+- Fixed bug where build output would jump between collapsed and expanded states during a stream, after the user manually expanded.
+
+## CLI Version 2.0.1
+- Fix for REPL startup failing when self-hosting or using BYOK cloud mode (https://github.com/khulnasoft/gpt4cli/issues/216)
+- Fix for potential crash with custom model pack (https://github.com/khulnasoft/gpt4cli/issues/217)
+
+## CLI Version 2.0.0
+👋 Hi, Dane here. I'm the creator and lead developer of Gpt4cli.
+
+I'm excited to announce the beta release of Gpt4cli v2, featuring major improvements in capabilities, user experience, and automation.
+
+Gpt4cli
+
+## 🤖  Overview
+
+While built on the same basic foundations as v1, v2 is best thought of as a new project with far more ambitious goals. 
+
+Gpt4cli is now a top-tier coding agent with fully autonomous capabilities.
+
+By default, it combines the strengths of three top foundation model providers—Anthropic, OpenAI, and Google—to achieve significantly better coding results than can be achieved with only a single provider's models.
+
+You get the coding abilities of Anthropic, the cost-effectiveness and speed of OpenAI's o3 mini, and the massive 2M token context window of Google Gemini, each used in the roles they're best suited for.
+
+Gpt4cli can: 
+  - Discuss a project or feature at a high level
+  - Load relevant context as needed throughout the discussion
+  - Solidify the discussion into a detailed plan
+  - Implement the changes
+  - Apply the changes to your files
+  - Run necessary commands
+  - Automatically debug failures
+
+Adding these capabilities together, Gpt4cli can handle complex tasks that span entire large features or entire projects, generating 50-100 files or more in a single run.
+
+Below is a more detailed look at what's new. You can also check out the updated [README](https://github.com/khulnasoft/gpt4cli/blob/main/README.md), [website](https://gpt4cli.khulnasoft.com), and [docs](https://docs.gpt4cli.khulnasoft.com).
+
+## 🧠  Newer, Smarter Models
+
+- New default model pack combining Claude 3.7 Sonnet, o3-mini, and Gemini 1.5 Pro.
+
+- A new set of built-in models and model packs for different use cases, including `daily-driver` (the default pack), `strong`, `cheap`, and `oss` packs, among others.
+
+- New `architect` and `coder` roles that make it easier to use different models for different stages in the planning and implementation process.
+
+## 📥  Better Context Management
+
+- Automatic context selection with tree-sitter project maps (30+ languages supported).
+
+- Effective 2M token context window for large tasks (massive codebases of ~20M tokens and more can be indexed for automatic context selection).
+
+- Smart context management limits implementation steps to necessary files only, reducing costs and latency.
+
+- Prompt caching for OpenAI and Anthropic models further reduces latency and costs.
+
+## 📝  Reliable File Edits
+
+- Much improved file editing performance and reliability, especially for large files.
+
+- Simple edits can often be applied deterministically without a model call, reducing costs and latency.
+
+- For more complex edits, validation and multiple fallbacks help ensure a very low failure rate.
+
+- Supports individual files up to 100k tokens.
+
+- On Gpt4cli Cloud, a fine-tuned "instant apply" model further speeds up and reduces the cost of editing files up to 32k tokens in size. This is offered at no additional cost.
+
+## 💻  New Developer Experience
+
+- v2 includes a new default way to use Gpt4cli: the Gpt4cli REPL. Just type `gpt4cli` in any project directory to start the REPL.
+
+- Simple and intuitive chat-like experience.
+
+- Fuzzy autocomplete for commands and files, 'chat' vs. 'tell' modes that separate ideation from implementation, and a multi-line mode for friendly editing of long prompts.
+
+- All commands are still available as CLI calls directly from the terminal.
+
+## 🚀  Configurable Automation
+
+- Gpt4cli is now capable of full autonomy with 'full auto' mode. It can load necessary context, apply changes, execute commands, and automatically debug problems.
+
+- The automation level can be precisely configured depending on the task and your comfort level. A `basic` mode works just like Gpt4cli v1, where files are loaded manually and execution is disabled. The new default in v2 is `semi-auto`, which enables automatic context loading, but still requires approval to apply changes and execute commands.
+
+- By default, Gpt4cli now includes command execution (with approval) in its planning process. It can install dependencies, build and run code, run tests, and more.
+
+- Command execution is integrated with Gpt4cli's diff review sandbox. Changes are tentatively applied before running commands, then rolled back if the command fails.
+
+- A new `debug` command allows for automated debugging of any terminal command. Use it with type checkers, linters, builds, tests, and more.
+
+## 💳  Built-in Payments, Credits, and Budgeting on Gpt4cli Cloud
+
+- Apart from the open source version of Gpt4cli, which includes **all core features**, Gpt4cli Cloud is a full-fledged product.
+
+- It offers two subscription options: an **Integrated Models** mode that requires no additional accounts or API keys, and a **BYO API Key** mode that allows you to use your own OpenAI and OpenRouter.ai accounts and API keys. 
+
+- In Integrated Models mode, you buy credits from Gpt4cli Cloud and manage billing centrally. It includes usage tracking and reporting via the `usage` command, as well as convenience and budgeting features like an auto-recharge threshold, a notification threshold on monthly spend, and an overall monthly limit. You can [learn more about pricing here](https://gpt4cli.khulnasoft.com#pricing).
+
+- Billing settings are managed with a web dashboard (it can be accessed via the CLI with the `billing` command).
+
+## 🪪  License Update
+
+- Gpt4cli has transitioned from AGPL 3.0 to the MIT License, simplifying future open-source contributions and allowing easier integration of proprietary enhancements in Gpt4cli Cloud and related products.
+
+- If you’ve previously contributed under AGPL and have concerns about this relicensing, please [reach out.](mailto:dane@gpt4cli.khulnasoft.com)
+
+## 🧰  And More
+
+This isn't an exhaustive list! Apart from the above, there are many smaller features, bug fixes, and quality of life improvements. Give the updated [docs](https://docs.gpt4cli.khulnasoft.com) a read for a full accounting of all commands and functionality.
+
+## 🌟  Get Started
+
+Go to the [quickstart](https://docs.gpt4cli.khulnasoft.com/quickstart) to get started with v2 in minutes.
+
+**Note:** while built on the same foundations, Gpt4cli v2 is designed to be a run separately and independently from v1. It's not an in-place upgrade. So there's nothing in particular you need to do to upgrade; just follow the quickstart as if you were a brand new user. [More details here.](https://docs.gpt4cli.khulnasoft.com/upgrading-v1-to-v2)
+
+## 🙌  Don't Be A Stranger
+
+- Jump into the [Gpt4cli Discord](https://discord.gg/khulnasoft) if you have questions or feedback, or just want to hang out.
+
+- You can [post an issue on GitHub](https://github.com/khulnasoft/gpt4cli/issues) or [start a discussion](https://github.com/khulnasoft/gpt4cli/discussions).
+
+- You can reach out by email: [support@gpt4cli.khulnasoft.com](mailto:support@gpt4cli.khulnasoft.com).
+
+- You can follow [@KhulnaSoft](https://x.com/khulnasoft) or my personal account [@Danenania](https://x.com/danenania) on X for updates, announcements, and random musings.
+
+- You can subscribe on [YouTube](https://www.youtube.com/@gpt4cli-ny5ry) for demonstrations, tutorials, and AI coding projects.
+
 ## Version 1.1.1
 ## Fix for terminal flickering when streaming plans 📺
 
@@ -166,7 +340,7 @@ Remember, you can run `gpt4cli model-packs` for details on all built-in model pa
 
 ## Version 0.8.2
 - Fix root level --help/-h to use custom help command rather than cobra's help message (re: https://github.com/khulnasoft/gpt4cli/issues/25)
-- Include 'survey' fork (https://github.com/khulnasoft/gpt4cli) as a proper module instead of a local reference (https://github.com/khulnasoft/gpt4cli/pull/37)
+- Include 'survey' fork (https://github.com/khulnasoft-lab/survey) as a proper module instead of a local reference (https://github.com/khulnasoft/gpt4cli/pull/37)
 - Add support for OPENAI_ENDPOINT environment variable for custom OpenAI endpoints (https://github.com/khulnasoft/gpt4cli/pull/46)
 - Add support for OPENAI_ORG_ID environment variable for setting the OpenAI organization ID when using an API key with multiple OpenAI organizations.
 

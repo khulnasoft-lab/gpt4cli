@@ -4,162 +4,194 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"gpt4cli-server/db"
+	"log"
+	"net/http"
 	"gpt4cli-server/model"
 	"gpt4cli-server/model/prompts"
-	"log"
+	"gpt4cli-server/notify"
+	"gpt4cli-server/types"
+	"gpt4cli-server/utils"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
+	shared "gpt4cli-shared"
+
 	"github.com/sashabaranov/go-openai"
 )
 
-func (state *activeTellStreamState) execStatusShouldContinue(message string, latestSummaryCh chan *db.ConvoSummary, ctx context.Context) (bool, string, error) {
+// controls the number steps to spent trying to finish a single subtask
+// if a subtask is not finished in this number of steps, we'll give up and mark it done
+// necessary to prevent infinite loops
+const MaxPreviousMessages = 4
+
+type execStatusShouldContinueResult struct {
+	subtaskFinished bool
+}
+
+func (state *activeTellStreamState) execStatusShouldContinue(currentMessage string, sessionId string, ctx context.Context) (execStatusShouldContinueResult, *shared.ApiError) {
+	auth := state.auth
+	plan := state.plan
 	settings := state.settings
 	clients := state.clients
 	config := settings.ModelPack.ExecStatus
 
-	envVar := config.BaseModelConfig.ApiKeyEnvVar
-	client := clients[envVar]
+	// Check subtask completion
+	if state.currentSubtask != nil {
+		completionMarker := fmt.Sprintf("**%s** has been completed", state.currentSubtask.Title)
+		log.Printf("[ExecStatus] Checking for subtask completion marker: %q", completionMarker)
+		log.Printf("[ExecStatus] Current subtask: %q", state.currentSubtask.Title)
+
+		if strings.Contains(currentMessage, completionMarker) {
+			log.Printf("[ExecStatus] ✓ Subtask completion marker found")
+			return execStatusShouldContinueResult{
+				subtaskFinished: true,
+			}, nil
+
+			// NOTE: tried using an LLM to verify "suspicious" subtask completions, but in practice led to too many extra LLM calls and disagreement cycles between agent roles (it's finished. no it's note! etc.)
+			// now just going back to trusting the completion marker... basically it's better to err on the side of marking tasks done.
+
+			// var potentialProblem bool
+
+			// if len(state.chunkProcessor.replyOperations) == 0 {
+			// 	log.Printf("[ExecStatus] ✗ Subtask completion marker found, but there are no operations to execute")
+			// 	potentialProblem = true
+			// } else {
+			// wroteToPaths := map[string]bool{}
+			// for _, op := range state.chunkProcessor.replyOperations {
+			// 	if op.Type == shared.OperationTypeFile {
+			// 		wroteToPaths[op.Path] = true
+			// 	}
+			// }
+
+			// for _, path := range state.currentSubtask.UsesFiles {
+			// 	if !wroteToPaths[path] {
+			// 		log.Printf("[ExecStatus] ✗ Subtask completion marker found, but the operations did not write to the file %q from the 'Uses' list", path)
+			// 		potentialProblem = true
+			// 		break
+			// 	}
+			// }
+			// }
+
+			// if !potentialProblem {
+			// 	log.Printf("[ExecStatus] ✓ Subtask completion marker found and no potential problem - will mark as completed")
+
+			// 	return execStatusShouldContinueResult{
+			// 		subtaskFinished: true,
+			// 	}, nil
+			// } else if state.currentSubtask.NumTries >= 1 {
+			// 	log.Printf("[ExecStatus] ✓ Subtask completion marker found, but the operations are questionable -- marking it done anyway since it's the second try and we can't risk an infinite loop")
+
+			// 	return execStatusShouldContinueResult{
+			// 		subtaskFinished: true,
+			// 	}, nil
+			// } else {
+			// 	log.Printf("[ExecStatus] ✗ Subtask completion marker found, but the operations are questionable -- will verify with LLM call")
+			// }
+		} else {
+			log.Printf("[ExecStatus] ✗ No subtask completion marker found in message")
+		}
+
+		log.Println("[ExecStatus] Current subtasks state:")
+		for i, task := range state.subtasks {
+			log.Printf("[ExecStatus] Task %d: %q (finished=%v)", i+1, task.Title, task.IsFinished)
+		}
+	}
 
 	log.Println("Checking if plan should continue based on exec status")
 
-	// First try to determine if the plan should continue based on the last paragraph without calling the model
-	paragraphs := strings.Split(message, "\n\n")
-	lastParagraph := paragraphs[len(paragraphs)-1]
-	lastParagraphLower := strings.ToLower(lastParagraph)
+	fullSubtask := state.currentSubtask.Title
+	fullSubtask += "\n\n" + state.currentSubtask.Description
 
-	// log.Printf("Last paragraph: %s\n", lastParagraphLower)
-
-	if lastParagraphLower != "" {
-		nextIdx := strings.Index(lastParagraph, "Next, ")
-		if nextIdx >= 0 {
-			log.Println("Plan can be continued based on last paragraph")
-			return true, lastParagraph, nil
+	previousMessages := []string{}
+	for _, msg := range state.convo {
+		if msg.Subtask != nil && msg.Subtask.Title == state.currentSubtask.Title {
+			previousMessages = append(previousMessages, msg.Message)
 		}
 	}
 
-	var prevAssistantMsg string
-	if len(state.convo) > 1 {
-		// iterate backwards from len(state.convo) - 2 to 0
-		for i := len(state.convo) - 2; i >= 0; i-- {
-			if state.convo[i].Role == "assistant" {
-				prevAssistantMsg = state.convo[i].Message
-				break
+	if len(previousMessages) >= MaxPreviousMessages {
+		log.Printf("[ExecStatus] ✗ Max previous messages reached - will mark as completed and move on to next subtask")
+		return execStatusShouldContinueResult{
+			subtaskFinished: true,
+		}, nil
+	}
+
+	prompt := prompts.GetExecStatusFinishedSubtask(prompts.GetExecStatusFinishedSubtaskParams{
+		UserPrompt:                 state.userPrompt,
+		CurrentSubtask:             fullSubtask,
+		CurrentMessage:             currentMessage,
+		PreviousMessages:           previousMessages,
+		PreferredModelOutputFormat: config.BaseModelConfig.PreferredModelOutputFormat,
+	})
+
+	messages := []types.ExtendedChatMessage{
+		{
+			Role: openai.ChatMessageRoleSystem,
+			Content: []types.ExtendedChatMessagePart{
+				{
+					Type: openai.ChatMessagePartTypeText,
+					Text: prompt,
+				},
+			},
+		},
+	}
+
+	modelRes, err := model.ModelRequest(ctx, model.ModelRequestParams{
+		Clients:        clients,
+		Auth:           auth,
+		Plan:           plan,
+		ModelConfig:    &config,
+		Purpose:        "Task completion check",
+		Messages:       messages,
+		ModelStreamId:  state.modelStreamId,
+		ConvoMessageId: state.replyId,
+		SessionId:      sessionId,
+	})
+
+	if err != nil {
+		log.Printf("[ExecStatus] Error in model call: %v", err)
+		return execStatusShouldContinueResult{}, nil
+	}
+
+	content := modelRes.Content
+
+	var reasoning string
+	var subtaskFinished bool
+
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		reasoning = utils.GetXMLContent(content, "reasoning")
+		subtaskFinishedStr := utils.GetXMLContent(content, "subtaskFinished")
+		subtaskFinished = subtaskFinishedStr == "true"
+
+		if reasoning == "" || subtaskFinishedStr == "" {
+			go notify.NotifyErr(notify.SeverityError, fmt.Errorf("execStatusShouldContinue: missing required XML tags in response"))
+
+			return execStatusShouldContinueResult{}, &shared.ApiError{
+				Type:   shared.ApiErrorTypeOther,
+				Status: http.StatusInternalServerError,
+				Msg:    "Missing required XML tags in response",
 			}
 		}
-	}
+	} else {
 
-	var latestSummary *db.ConvoSummary
-
-	if latestSummaryCh != nil {
-		log.Println("Waiting for latest summary")
-		select {
-		case <-ctx.Done():
-			log.Println("Context cancelled while waiting for latest summary")
-			return false, "", fmt.Errorf("context cancelled while waiting for latest summary")
-		case latestSummary = <-latestSummaryCh:
-			log.Println("Got latest summary")
+		if content == "" {
+			log.Printf("[ExecStatus] No function response found in model output")
+			return execStatusShouldContinueResult{}, nil
 		}
-	}
 
-	var summary string
-	if latestSummary != nil {
-		summary = latestSummary.Summary
-	}
-
-	messages := []openai.ChatCompletionMessage{
-		{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompts.GetExecStatusShouldContinue(summary, prevAssistantMsg, state.userPrompt, message),
-		},
-	}
-
-	log.Println("Calling model to check if plan should continue")
-	log.Println("Has latest summary:", summary != "")
-	log.Println("Has prev assistant msg:", prevAssistantMsg != "")
-
-	// log.Println("messages:")
-	// log.Println(spew.Sdump(messages))
-
-	var responseFormat *openai.ChatCompletionResponseFormat
-	if config.BaseModelConfig.HasJsonResponseMode {
-		responseFormat = &openai.ChatCompletionResponseFormat{Type: "json_object"}
-	}
-
-	resp, err := model.CreateChatCompletionWithRetries(
-		client,
-		ctx,
-		openai.ChatCompletionRequest{
-			Model: config.BaseModelConfig.ModelName,
-			Tools: []openai.Tool{
-				{
-					Type:     "function",
-					Function: &prompts.ShouldAutoContinueFn,
-				},
-			},
-			ToolChoice: openai.ToolChoice{
-				Type: "function",
-				Function: openai.ToolFunction{
-					Name: prompts.ShouldAutoContinueFn.Name,
-				},
-			},
-			Messages:       messages,
-			ResponseFormat: responseFormat,
-			Temperature:    config.Temperature,
-			TopP:           config.TopP,
-		},
-	)
-
-	if err != nil {
-		log.Printf("Error during plan exec status check model call: %v\n", err)
-		// return false, fmt.Errorf("error during plan exec status check model call: %v", err)
-
-		// Instead of erroring out, just don't continue the plan
-		return false, "", nil
-	}
-
-	var strRes string
-	var res struct {
-		MessageFinishedSubtasks []string `json:"messageSubtasksFinished"`
-		Comments                []struct {
-			Txt               string `json:"txt"`
-			IsTodoPlaceholder bool   `json:"isTodoPlaceholder"`
-		} `json:"comments"`
-		Reasoning      string `json:"reasoning"`
-		ShouldContinue bool   `json:"shouldContinue"`
-	}
-
-	for _, choice := range resp.Choices {
-		if len(choice.Message.ToolCalls) == 1 &&
-			choice.Message.ToolCalls[0].Function.Name == prompts.ShouldAutoContinueFn.Name {
-			fnCall := choice.Message.ToolCalls[0].Function
-			strRes = fnCall.Arguments
-			break
+		var res types.ExecStatusResponse
+		if err := json.Unmarshal([]byte(content), &res); err != nil {
+			log.Printf("[ExecStatus] Failed to parse response: %v", err)
+			return execStatusShouldContinueResult{}, nil
 		}
+
+		reasoning = res.Reasoning
+		subtaskFinished = res.SubtaskFinished
 	}
 
-	if strRes == "" {
-		log.Println("No shouldAutoContinue function call found in response")
-		log.Println(spew.Sdump(resp))
+	log.Printf("[ExecStatus] Decision: subtaskFinished=%v, reasoning=%v",
+		subtaskFinished, reasoning)
 
-		// return false, fmt.Errorf("no shouldAutoContinue function call found in response")
-
-		// Instead of erroring out, just don't continue the plan
-		return false, "", nil
-	}
-
-	err = json.Unmarshal([]byte(strRes), &res)
-	if err != nil {
-		log.Printf("Error unmarshalling plan exec status response: %v\n", err)
-
-		// return false, fmt.Errorf("error unmarshalling plan exec status response: %v", err)
-
-		// Instead of erroring out, just don't continue the plan
-		return false, "", nil
-	}
-
-	log.Printf("Plan exec status response: %v\n", res)
-
-	return res.ShouldContinue, res.Reasoning, nil
+	return execStatusShouldContinueResult{
+		subtaskFinished: subtaskFinished,
+	}, nil
 }

@@ -4,238 +4,285 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"gpt4cli-server/db"
 	"gpt4cli-server/model/prompts"
-	"log"
+	"gpt4cli-server/types"
+	"gpt4cli-server/utils"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
+
 	"github.com/sashabaranov/go-openai"
 )
 
-func GenPlanName(client *openai.Client, config shared.ModelRoleConfig, planContent string) (string, error) {
-	messages := []openai.ChatCompletionMessage{
+func GenPlanName(
+	auth *types.ServerAuth,
+	plan *db.Plan,
+	settings *shared.PlanSettings,
+	clients map[string]ClientInfo,
+	planContent string,
+	sessionId string,
+	ctx context.Context,
+) (string, error) {
+	config := settings.ModelPack.Namer
+
+	var tools []openai.Tool
+	var toolChoice *openai.ToolChoice
+
+	var sysPrompt string
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		sysPrompt = prompts.SysPlanNameXml
+	} else {
+		sysPrompt = prompts.SysPlanName
+		tools = []openai.Tool{
+			{
+				Type:     "function",
+				Function: &prompts.PlanNameFn,
+			},
+		}
+		choice := openai.ToolChoice{
+			Type: "function",
+			Function: openai.ToolFunction{
+				Name: prompts.PlanNameFn.Name,
+			},
+		}
+		toolChoice = &choice
+	}
+
+	prompt := prompts.GetPlanNamePrompt(sysPrompt, planContent)
+
+	messages := []types.ExtendedChatMessage{
 		{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompts.GetPlanNamePrompt(planContent),
-		},
-	}
-
-	var responseFormat *openai.ChatCompletionResponseFormat
-	if config.BaseModelConfig.HasJsonResponseMode {
-		responseFormat = &openai.ChatCompletionResponseFormat{Type: "json_object"}
-	}
-
-	resp, err := CreateChatCompletionWithRetries(
-		client,
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: config.BaseModelConfig.ModelName,
-			Tools: []openai.Tool{
+			Role: openai.ChatMessageRoleSystem,
+			Content: []types.ExtendedChatMessagePart{
 				{
-					Type:     "function",
-					Function: &prompts.PlanNameFn,
+					Type: openai.ChatMessagePartTypeText,
+					Text: prompt,
 				},
 			},
-			ToolChoice: openai.ToolChoice{
-				Type: "function",
-				Function: openai.ToolFunction{
-					Name: prompts.PlanNameFn.Name,
-				},
-			},
-			Temperature:    config.Temperature,
-			TopP:           config.TopP,
-			Messages:       messages,
-			ResponseFormat: responseFormat,
 		},
-	)
+	}
 
-	var res string
-	var nameRes prompts.PlanNameRes
+	modelRes, err := ModelRequest(ctx, ModelRequestParams{
+		Clients:     clients,
+		Auth:        auth,
+		Plan:        plan,
+		ModelConfig: &config,
+		Purpose:     "Plan name",
+		Messages:    messages,
+		Tools:       tools,
+		ToolChoice:  toolChoice,
+		SessionId:   sessionId,
+	})
 
 	if err != nil {
 		fmt.Printf("Error during plan name model call: %v\n", err)
 		return "", err
 	}
 
-	for _, choice := range resp.Choices {
-		if len(choice.Message.ToolCalls) == 1 &&
-			choice.Message.ToolCalls[0].Function.Name == prompts.PlanNameFn.Name {
-			fnCall := choice.Message.ToolCalls[0].Function
-			res = fnCall.Arguments
-			break
+	var planName string
+	content := modelRes.Content
+
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		planName = utils.GetXMLContent(content, "planName")
+		if planName == "" {
+			return "", fmt.Errorf("No planName tag found in XML response")
 		}
+	} else {
+		if content == "" {
+			fmt.Println("no namePlan function call found in response")
+			return "", fmt.Errorf("No namePlan function call found in response. The model failed to generate a valid response.")
+		}
+
+		var nameRes prompts.PlanNameRes
+		err = json.Unmarshal([]byte(content), &nameRes)
+		if err != nil {
+			fmt.Printf("Error unmarshalling plan description response: %v\n", err)
+			return "", err
+		}
+		planName = nameRes.PlanName
 	}
 
-	if res == "" {
-		fmt.Println("no namePlan function call found in response")
-		return "", err
-	}
-
-	bytes := []byte(res)
-
-	err = json.Unmarshal(bytes, &nameRes)
-	if err != nil {
-		fmt.Printf("Error unmarshalling plan description response: %v\n", err)
-		return "", err
-	}
-
-	return nameRes.PlanName, nil
-
+	return planName, nil
 }
 
-func GenPipedDataName(client *openai.Client, config shared.ModelRoleConfig, pipedContent string) (string, error) {
-	messages := []openai.ChatCompletionMessage{
+func GenPipedDataName(
+	ctx context.Context,
+	auth *types.ServerAuth,
+	plan *db.Plan,
+	settings *shared.PlanSettings,
+	clients map[string]ClientInfo,
+	pipedContent string,
+	sessionId string,
+) (string, error) {
+	config := settings.ModelPack.Namer
+
+	var sysPrompt string
+	var tools []openai.Tool
+	var toolChoice *openai.ToolChoice
+
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		sysPrompt = prompts.SysPipedDataNameXml
+	} else {
+		sysPrompt = prompts.SysPipedDataName
+		tools = []openai.Tool{
+			{
+				Type:     "function",
+				Function: &prompts.PipedDataNameFn,
+			},
+		}
+		choice := openai.ToolChoice{
+			Type: "function",
+			Function: openai.ToolFunction{
+				Name: prompts.PipedDataNameFn.Name,
+			},
+		}
+		toolChoice = &choice
+	}
+
+	prompt := prompts.GetPipedDataNamePrompt(sysPrompt, pipedContent)
+
+	messages := []types.ExtendedChatMessage{
 		{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompts.GetPipedDataNamePrompt(pipedContent),
-		},
-	}
-
-	var responseFormat *openai.ChatCompletionResponseFormat
-	if config.BaseModelConfig.HasJsonResponseMode {
-		responseFormat = &openai.ChatCompletionResponseFormat{Type: "json_object"}
-	}
-
-	log.Println("calling piped data name model")
-	// log.Printf("model: %s\n", config.BaseModelConfig.ModelName)
-	// log.Printf("temperature: %f\n", config.Temperature)
-	// log.Printf("topP: %f\n", config.TopP)
-
-	// log.Printf("messages: %v\n", messages)
-	// log.Println(spew.Sdump(messages))
-
-	resp, err := CreateChatCompletionWithRetries(
-		client,
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: config.BaseModelConfig.ModelName,
-			Tools: []openai.Tool{
+			Role: openai.ChatMessageRoleSystem,
+			Content: []types.ExtendedChatMessagePart{
 				{
-					Type:     "function",
-					Function: &prompts.PipedDataNameFn,
+					Type: openai.ChatMessagePartTypeText,
+					Text: prompt,
 				},
 			},
-			ToolChoice: openai.ToolChoice{
-				Type: "function",
-				Function: openai.ToolFunction{
-					Name: prompts.PipedDataNameFn.Name,
-				},
-			},
-			Temperature:    config.Temperature,
-			TopP:           config.TopP,
-			Messages:       messages,
-			ResponseFormat: responseFormat,
 		},
-	)
+	}
 
-	var res string
-	var nameRes prompts.PipedDataNameRes
+	modelRes, err := ModelRequest(ctx, ModelRequestParams{
+		Clients:     clients,
+		Auth:        auth,
+		Plan:        plan,
+		ModelConfig: &config,
+		Purpose:     "Piped data name",
+		Messages:    messages,
+		Tools:       tools,
+		ToolChoice:  toolChoice,
+		SessionId:   sessionId,
+	})
 
 	if err != nil {
 		fmt.Printf("Error during piped data name model call: %v\n", err)
 		return "", err
 	}
 
-	for _, choice := range resp.Choices {
-		if len(choice.Message.ToolCalls) == 1 &&
-			choice.Message.ToolCalls[0].Function.Name == prompts.PipedDataNameFn.Name {
-			fnCall := choice.Message.ToolCalls[0].Function
-			res = fnCall.Arguments
-			break
+	var name string
+	content := modelRes.Content
+
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		name = utils.GetXMLContent(content, "name")
+		if name == "" {
+			return "", fmt.Errorf("No name tag found in XML response")
 		}
+	} else {
+		if content == "" {
+			fmt.Println("no namePipedData function call found in response")
+			return "", fmt.Errorf("No namePipedData function call found in response. The model failed to generate a valid response.")
+		}
+
+		var nameRes prompts.PipedDataNameRes
+		err = json.Unmarshal([]byte(content), &nameRes)
+		if err != nil {
+			fmt.Printf("Error unmarshalling piped data name response: %v\n", err)
+			return "", err
+		}
+		name = nameRes.Name
 	}
 
-	if res == "" {
-		fmt.Println("no namePipedData function call found in response")
-		return "", err
-	}
-
-	bytes := []byte(res)
-
-	err = json.Unmarshal(bytes, &nameRes)
-	if err != nil {
-		fmt.Printf("Error unmarshalling piped data name response: %v\n", err)
-		return "", err
-	}
-
-	return nameRes.Name, nil
-
+	return name, nil
 }
 
-func GenNoteName(client *openai.Client, config shared.ModelRoleConfig, note string) (string, error) {
-	messages := []openai.ChatCompletionMessage{
-		{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompts.GetNoteNamePrompt(note),
-		},
-	}
+func GenNoteName(
+	ctx context.Context,
+	auth *types.ServerAuth,
+	plan *db.Plan,
+	settings *shared.PlanSettings,
+	clients map[string]ClientInfo,
+	note string,
+	sessionId string,
+) (string, error) {
+	config := settings.ModelPack.Namer
 
-	var responseFormat *openai.ChatCompletionResponseFormat
-	if config.BaseModelConfig.HasJsonResponseMode {
-		responseFormat = &openai.ChatCompletionResponseFormat{Type: "json_object"}
-	}
+	var sysPrompt string
+	var tools []openai.Tool
+	var toolChoice *openai.ToolChoice
 
-	log.Println("calling piped data name model")
-	// log.Printf("model: %s\n", config.BaseModelConfig.ModelName)
-	// log.Printf("temperature: %f\n", config.Temperature)
-	// log.Printf("topP: %f\n", config.TopP)
-
-	// log.Printf("messages: %v\n", messages)
-	// log.Println(spew.Sdump(messages))
-
-	resp, err := CreateChatCompletionWithRetries(
-		client,
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: config.BaseModelConfig.ModelName,
-			Tools: []openai.Tool{
-				{
-					Type:     "function",
-					Function: &prompts.NoteNameFn,
-				},
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		sysPrompt = prompts.SysNoteNameXml
+	} else {
+		sysPrompt = prompts.SysNoteName
+		tools = []openai.Tool{
+			{
+				Type:     "function",
+				Function: &prompts.NoteNameFn,
 			},
-			ToolChoice: openai.ToolChoice{
-				Type: "function",
-				Function: openai.ToolFunction{
-					Name: prompts.NoteNameFn.Name,
-				},
-			},
-			Temperature:    config.Temperature,
-			TopP:           config.TopP,
-			Messages:       messages,
-			ResponseFormat: responseFormat,
-		},
-	)
-
-	var res string
-	var nameRes prompts.NoteNameRes
-
-	if err != nil {
-		fmt.Printf("Error during piped data name model call: %v\n", err)
-		return "", err
-	}
-
-	for _, choice := range resp.Choices {
-		if len(choice.Message.ToolCalls) == 1 &&
-			choice.Message.ToolCalls[0].Function.Name == prompts.NoteNameFn.Name {
-			fnCall := choice.Message.ToolCalls[0].Function
-			res = fnCall.Arguments
-			break
 		}
+		choice := openai.ToolChoice{
+			Type: "function",
+			Function: openai.ToolFunction{
+				Name: prompts.NoteNameFn.Name,
+			},
+		}
+		toolChoice = &choice
 	}
 
-	if res == "" {
-		fmt.Println("no nameNote function call found in response")
-		return "", err
+	prompt := prompts.GetNoteNamePrompt(sysPrompt, note)
+
+	messages := []types.ExtendedChatMessage{
+		{
+			Role: openai.ChatMessageRoleSystem,
+			Content: []types.ExtendedChatMessagePart{
+				{
+					Type: openai.ChatMessagePartTypeText,
+					Text: prompt,
+				},
+			},
+		},
 	}
 
-	bytes := []byte(res)
+	modelRes, err := ModelRequest(ctx, ModelRequestParams{
+		Clients:     clients,
+		Auth:        auth,
+		Plan:        plan,
+		ModelConfig: &config,
+		Purpose:     "Note name",
+		Messages:    messages,
+		Tools:       tools,
+		ToolChoice:  toolChoice,
+		SessionId:   sessionId,
+	})
 
-	err = json.Unmarshal(bytes, &nameRes)
 	if err != nil {
-		fmt.Printf("Error unmarshalling piped data name response: %v\n", err)
+		fmt.Printf("Error during note name model call: %v\n", err)
 		return "", err
 	}
 
-	return nameRes.Name, nil
+	var name string
+	content := modelRes.Content
 
+	if config.BaseModelConfig.PreferredModelOutputFormat == shared.ModelOutputFormatXml {
+		name = utils.GetXMLContent(content, "name")
+		if name == "" {
+			return "", fmt.Errorf("No name tag found in XML response")
+		}
+	} else {
+		if content == "" {
+			fmt.Println("no nameNote function call found in response")
+			return "", fmt.Errorf("No nameNote function call found in response. The model failed to generate a valid response.")
+		}
+
+		var nameRes prompts.NoteNameRes
+		err = json.Unmarshal([]byte(content), &nameRes)
+		if err != nil {
+			fmt.Printf("Error unmarshalling note name response: %v\n", err)
+			return "", err
+		}
+		name = nameRes.Name
+	}
+
+	return name, nil
 }

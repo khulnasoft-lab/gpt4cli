@@ -2,13 +2,22 @@ package term
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
+	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
+
+func init() {
+	// pre-cache terminal settings
+	IsTerminal()
+	GetTerminalWidth()
+	GetStreamForegroundColor()
+	HasDarkBackground()
+}
 
 func AlternateScreen() {
 	// Switch to alternate screen and hide the cursor
@@ -64,18 +73,88 @@ func PageOutputReverse(output string) {
 
 func GetDivisionLine() string {
 	// Get the terminal width
-	terminalWidth, err := getTerminalWidth()
-	if err != nil {
-		log.Println("Error fetching terminal size:", err)
-		terminalWidth = 50 // default width if unable to fetch width
-	}
+	terminalWidth := GetTerminalWidth()
 	return strings.Repeat("─", terminalWidth)
 }
 
-func getTerminalWidth() (int, error) {
-	width, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		return 0, err
+var envReplCols int
+var envDefaultCols int
+
+func GetTerminalWidth() int {
+	if envReplCols != 0 {
+		return envReplCols
 	}
-	return width, nil
+
+	if os.Getenv("GPT4CLI_COLUMNS") != "" {
+		w, err := strconv.Atoi(os.Getenv("GPT4CLI_COLUMNS"))
+		if err == nil {
+			envReplCols = w
+			return w
+		}
+	}
+
+	if IsTerminal() {
+		// Try to get terminal size
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			return w
+		}
+	}
+
+	if envDefaultCols != 0 {
+		return envDefaultCols
+	}
+
+	// Not running in a TTY or GetSize failed; use a default.
+	// Try to get width from environment variable
+	if w, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil {
+		envDefaultCols = w
+		return w
+	}
+
+	// Fallback to default width
+	return 80
+}
+
+var envStreamForegroundColor termenv.Color
+
+func GetStreamForegroundColor() termenv.Color {
+	if envStreamForegroundColor != nil {
+		return envStreamForegroundColor
+	}
+
+	if os.Getenv("GPT4CLI_STREAM_FOREGROUND_COLOR") != "" {
+		envStreamForegroundColor = termenv.ANSI256.Color(os.Getenv("GPT4CLI_STREAM_FOREGROUND_COLOR"))
+		return envStreamForegroundColor
+	}
+
+	c := "234"
+	if HasDarkBackground() {
+		c = "251"
+	}
+	envStreamForegroundColor = termenv.ANSI256.Color(c)
+	return envStreamForegroundColor
+}
+
+var envHasDarkBackground bool
+var cachedHasDarkBackground bool
+
+func HasDarkBackground() bool {
+	if cachedHasDarkBackground {
+		return envHasDarkBackground
+	}
+	envHasDarkBackground = termenv.HasDarkBackground()
+	cachedHasDarkBackground = true
+	return envHasDarkBackground
+}
+
+var envIsTerminal bool
+var cachedIsTerminal bool
+
+func IsTerminal() bool {
+	if cachedIsTerminal {
+		return envIsTerminal
+	}
+	envIsTerminal = term.IsTerminal(int(os.Stdout.Fd()))
+	cachedIsTerminal = true
+	return envIsTerminal
 }

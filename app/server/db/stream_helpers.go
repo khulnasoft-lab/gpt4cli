@@ -7,7 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
+
 	"github.com/lib/pq"
 )
 

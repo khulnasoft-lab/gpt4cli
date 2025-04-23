@@ -7,7 +7,7 @@ sidebar_label: Development
 
 To set up a development environment, first install dependencies:
 
-- Go 1.21.3 - [install here](https://go.dev/doc/install)
+- Go 1.23.3 - [install here](https://go.dev/doc/install)
 - [reflex](https://github.com/cespare/reflex) 0.3.1 - for watching files and rebuilding in development. Install with `go install github.com/cespare/reflex@v0.3.1`
 - PostgreSQL 14 - https://www.postgresql.org/download/
 
@@ -46,7 +46,7 @@ You might also need sudo on MacOS if you don't have write permissions to `/usr/l
 
 This creates watchers with `reflex` to rebuild both the server and the CLI when relevant files change.
 
-The server runs on port 8080 by default.
+The server runs on port 8099 by default.
 
 After each build, the CLI is copied to `/usr/local/bin/gpt4cli-dev`so you can use it with just `gpt4cli-dev` in any directory. A `g4cd` alias is also created. Note the difference from the `gpt4cli` binary and `g4c` aliases which are installed for production usage—aliases are used for development to avoid overwriting the production install.
 

@@ -3,29 +3,29 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"gpt4cli-server/db"
-	"gpt4cli-server/types"
 	"io"
 	"log"
 	"net/http"
-	"os"
+	"gpt4cli-server/db"
+	"gpt4cli-server/hooks"
 	"sort"
 	"strings"
 	"time"
 
+	shared "gpt4cli-shared"
+
 	"github.com/gorilla/mux"
-	"github.com/khulnasoft/gpt4cli/shared"
 )
 
 func CreatePlanHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for CreatePlanHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
 
-	if !auth.HasPermission(types.PermissionCreatePlan) {
+	if !auth.HasPermission(shared.PermissionCreatePlan) {
 		log.Println("User does not have permission to create a plan")
 		http.Error(w, "User does not have permission to create a plan", http.StatusForbidden)
 		return
@@ -40,28 +40,10 @@ func CreatePlanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if os.Getenv("IS_CLOUD") != "" {
-		user, err := db.GetUser(auth.User.Id)
-
-		if err != nil {
-			log.Printf("Error getting user: %v\n", err)
-			http.Error(w, "Error getting user: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		if user.IsTrial {
-			if user.NumNonDraftPlans >= types.TrialMaxPlans {
-				writeApiError(w, shared.ApiError{
-					Type:   shared.ApiErrorTypeTrialPlansExceeded,
-					Status: http.StatusForbidden,
-					Msg:    "User has reached max number of anonymous trial plans",
-					TrialPlansExceededError: &shared.TrialPlansExceededError{
-						MaxPlans: types.TrialMaxPlans,
-					},
-				})
-				return
-			}
-		}
+	_, apiErr := hooks.ExecHook(hooks.WillCreatePlan, hooks.HookParams{Auth: auth})
+	if apiErr != nil {
+		writeApiError(w, *apiErr)
+		return
 	}
 
 	// read the request body
@@ -116,7 +98,7 @@ func CreatePlanHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plan, err := db.CreatePlan(auth.OrgId, projectId, auth.User.Id, name)
+	plan, err := db.CreatePlan(r.Context(), auth.OrgId, projectId, auth.User.Id, name)
 
 	if err != nil {
 		log.Printf("Error creating plan: %v\n", err)
@@ -145,7 +127,7 @@ func CreatePlanHandler(w http.ResponseWriter, r *http.Request) {
 func GetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for GetPlanHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -175,7 +157,7 @@ func GetPlanHandler(w http.ResponseWriter, r *http.Request) {
 func RenamePlanHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for RenamePlanHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -224,7 +206,7 @@ func RenamePlanHandler(w http.ResponseWriter, r *http.Request) {
 func DeletePlanHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for DeletePlanHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -281,7 +263,7 @@ func DeletePlanHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteAllPlansHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for DeleteAllPlansHandler")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -309,7 +291,7 @@ func DeleteAllPlansHandler(w http.ResponseWriter, r *http.Request) {
 func ListPlansHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListPlans")
 
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -318,9 +300,21 @@ func ListPlansHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("projectIds: ", projectIds)
 
+	var apiPlans []*shared.Plan
+
+	writePlans := func() {
+		jsonBytes, err := json.Marshal(apiPlans)
+		if err != nil {
+			log.Printf("Error marshalling plans: %v\n", err)
+			http.Error(w, "Error marshalling plans: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Write(jsonBytes)
+	}
+
 	if len(projectIds) == 0 {
-		log.Println("No project ids provided")
-		http.Error(w, "No project ids provided", http.StatusBadRequest)
+		writePlans()
 		return
 	}
 
@@ -332,8 +326,7 @@ func ListPlansHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(authorizedProjectIds) == 0 {
-		log.Println("No authorized project ids provided")
-		http.Error(w, "No authorized project ids provided", http.StatusForbidden)
+		writePlans()
 		return
 	}
 
@@ -345,25 +338,16 @@ func ListPlansHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var apiPlans []*shared.Plan
 	for _, plan := range plans {
 		apiPlans = append(apiPlans, plan.ToApi())
 	}
 
-	bytes, err := json.Marshal(apiPlans)
-
-	if err != nil {
-		log.Printf("Error marshalling plans: %v\n", err)
-		http.Error(w, "Error marshalling plans: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Write(bytes)
+	writePlans()
 }
 
 func ListArchivedPlansHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListArchivedPlansHandler")
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -372,19 +356,34 @@ func ListArchivedPlansHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("projectIds: ", projectIds)
 
+	var apiPlans []*shared.Plan
+
+	writePlans := func() {
+		jsonBytes, err := json.Marshal(apiPlans)
+		if err != nil {
+			log.Printf("Error marshalling plans: %v\n", err)
+			http.Error(w, "Error marshalling plans: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		log.Println("Successfully processed ListArchivedPlansHandler request")
+
+		w.Write(jsonBytes)
+	}
+
 	if len(projectIds) == 0 {
-		log.Println("No project ids provided")
-		http.Error(w, "No project ids provided", http.StatusBadRequest)
+		writePlans()
 		return
 	}
 
+	authorizedProjectIds := []string{}
 	for _, projectId := range projectIds {
-		if !authorizeProject(w, projectId, auth) {
-			return
+		if authorizeProjectOptional(w, projectId, auth, false) {
+			authorizedProjectIds = append(authorizedProjectIds, projectId)
 		}
 	}
 
-	plans, err := db.ListOwnedPlans(projectIds, auth.User.Id, true)
+	plans, err := db.ListOwnedPlans(authorizedProjectIds, auth.User.Id, true)
 
 	if err != nil {
 		log.Printf("Error listing plans: %v\n", err)
@@ -392,26 +391,16 @@ func ListArchivedPlansHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var apiPlans []*shared.Plan
 	for _, plan := range plans {
 		apiPlans = append(apiPlans, plan.ToApi())
 	}
 
-	jsonBytes, err := json.Marshal(apiPlans)
-	if err != nil {
-		log.Printf("Error marshalling plans: %v\n", err)
-		http.Error(w, "Error marshalling plans: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	log.Println("Successfully processed ListArchivedPlansHandler request")
-
-	w.Write(jsonBytes)
+	writePlans()
 }
 
 func ListPlansRunningHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for ListPlansRunningHandler")
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}
@@ -569,7 +558,7 @@ func ListPlansRunningHandler(w http.ResponseWriter, r *http.Request) {
 
 func GetCurrentBranchByPlanIdHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received request for CurrentBranchByPlanIdHandler")
-	auth := authenticate(w, r, true)
+	auth := Authenticate(w, r, true)
 	if auth == nil {
 		return
 	}

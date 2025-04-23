@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -15,6 +16,10 @@ import (
 )
 
 var Conn *sqlx.DB
+
+const LockTimeout = 4000
+const IdleInTransactionSessionTimeout = 90000
+const StatementTimeout = 30000
 
 func Connect() error {
 	var err error
@@ -36,6 +41,12 @@ func Connect() error {
 		}
 	}
 
+	if strings.Contains(dbUrl, "?") {
+		dbUrl += fmt.Sprintf("&statement_timeout=%d&lock_timeout=%d&timezone=UTC&idle_in_transaction_session_timeout=%d", StatementTimeout, LockTimeout, IdleInTransactionSessionTimeout)
+	} else {
+		dbUrl += fmt.Sprintf("?statement_timeout=%d&lock_timeout=%d&timezone=UTC&idle_in_transaction_session_timeout=%d", StatementTimeout, LockTimeout, IdleInTransactionSessionTimeout)
+	}
+
 	Conn, err = sqlx.Connect("postgres", dbUrl)
 	if err != nil {
 		return err
@@ -43,16 +54,59 @@ func Connect() error {
 
 	log.Println("connected to database")
 
-	_, err = Conn.Exec("SET TIMEZONE='UTC';")
-
-	if err != nil {
-		return fmt.Errorf("error setting timezone: %v", err)
+	if os.Getenv("GOENV") == "production" {
+		Conn.SetMaxOpenConns(50)
+		Conn.SetMaxIdleConns(20)
+	} else {
+		Conn.SetMaxOpenConns(10)
+		Conn.SetMaxIdleConns(5)
 	}
+
+	// Verify settings
+	type setting struct {
+		Name    string  `db:"name"`
+		Setting string  `db:"setting"`
+		Unit    *string `db:"unit"`
+		Context string  `db:"context"`
+	}
+
+	var settings []setting
+	err = Conn.Select(&settings, `
+		SELECT name, setting, unit, context 
+		FROM pg_settings 
+		WHERE name IN ('statement_timeout', 'lock_timeout', 'TimeZone', 'idle_in_transaction_session_timeout')
+`)
+	if err != nil {
+		return fmt.Errorf("error checking settings: %v", err)
+	}
+
+	s := ""
+	for _, setting := range settings {
+		unitStr := ""
+		if setting.Unit != nil {
+			unitStr = " " + *setting.Unit // Add a leading space only if there's a unit
+		}
+		s += fmt.Sprintf("- %s = %s%s (context: %s)\n", setting.Name, setting.Setting, unitStr, setting.Context)
+	}
+	log.Printf("\n\nDatabase settings:\n%s\n", s)
 
 	return nil
 }
 
 func MigrationsUp() error {
+	migrationsDir := "migrations"
+	if os.Getenv("MIGRATIONS_DIR") != "" {
+		migrationsDir = os.Getenv("MIGRATIONS_DIR")
+	}
+
+	return migrationsUp(migrationsDir)
+}
+
+func MigrationsUpWithDir(dir string) error {
+	return migrationsUp(dir)
+}
+
+func migrationsUp(dir string) error {
 	if Conn == nil {
 		return errors.New("db not initialized")
 	}
@@ -64,7 +118,7 @@ func MigrationsUp() error {
 	}
 
 	m, err := migrate.NewWithDatabaseInstance(
-		"file://migrations",
+		"file://"+dir,
 		"postgres", driver)
 
 	if err != nil {
@@ -73,7 +127,7 @@ func MigrationsUp() error {
 
 	// Uncomment below (and update migration version) to reset migration state to a specific version after a failure
 	// if os.Getenv("GOENV") == "development" {
-	// 	migrateVersion := 2024041500
+	// 	migrateVersion := 2025022000
 	// 	if err := m.Force(migrateVersion); err != nil {
 	// 		return fmt.Errorf("error forcing migration version: %v", err)
 	// 	}
@@ -92,13 +146,14 @@ func MigrationsUp() error {
 	// 	log.Println("ran down migrations - database was reset")
 	// }
 
-	// Uncomment below to go back ONE migration
+	// Uncomment below and edit 'stepsBack' to go back a specific number of migrations
 	// if os.Getenv("GOENV") == "development" {
-	// 	err = m.Steps(-1)
+	// 	stepsBack := 1
+	// 	err = m.Steps(-stepsBack)
 	// 	if err != nil {
 	// 		return fmt.Errorf("error running down migrations: %v", err)
 	// 	}
-	// 	log.Println("went down 1 migration")
+	// 	log.Printf("went down %d migration\n", stepsBack)
 	// }
 
 	err = m.Up()

@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"fmt"
-	"gpt4cli/api"
-	"gpt4cli/auth"
-	"gpt4cli/lib"
-	"gpt4cli/term"
 	"os"
+	"gpt4cli-cli/api"
+	"gpt4cli-cli/auth"
+	"gpt4cli-cli/lib"
+	"gpt4cli-cli/term"
 	"strconv"
 
+	shared "gpt4cli-shared"
+
 	"github.com/fatih/color"
-	"github.com/khulnasoft/gpt4cli/shared"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
@@ -37,11 +38,26 @@ var deleteModelPackCmd = &cobra.Command{
 	Run:     deleteModelPack,
 }
 
+var updateModelPackCmd = &cobra.Command{
+	Use:   "update [name]",
+	Short: "Update a model pack by name",
+	Args:  cobra.MaximumNArgs(1),
+	Run:   updateModelPack,
+}
+
+var showModelPackCmd = &cobra.Command{
+	Use:   "show [name]",
+	Short: "Show a model pack by name",
+	Args:  cobra.MaximumNArgs(1),
+	Run:   showModelPack,
+}
+
 func init() {
 	RootCmd.AddCommand(modelPacksCmd)
 	modelPacksCmd.AddCommand(createModelPackCmd)
 	modelPacksCmd.AddCommand(deleteModelPackCmd)
-
+	modelPacksCmd.AddCommand(updateModelPackCmd)
+	modelPacksCmd.AddCommand(showModelPackCmd)
 	modelPacksCmd.Flags().BoolVarP(&customModelPacksOnly, "custom", "c", false, "Only show custom model packs")
 }
 
@@ -164,11 +180,11 @@ func listModelPacks(cmd *cobra.Command, args []string) {
 	}
 
 	if customModelPacksOnly && len(customModelPacks) > 0 {
-		term.PrintCmds("", "model-packs create", "model-packs delete")
+		term.PrintCmds("", "model-packs create", "model-packs show", "model-packs update", "model-packs delete")
 	} else if len(customModelPacks) > 0 {
-		term.PrintCmds("", "model-packs --custom", "model-packs create", "model-packs delete")
+		term.PrintCmds("", "model-packs --custom", "model-packs create", "model-packs show", "model-packs update", "model-packs delete")
 	} else {
-		term.PrintCmds("", "model-packs create")
+		term.PrintCmds("", "model-packs create", "model-packs show")
 	}
 
 }
@@ -202,15 +218,23 @@ func createModelPack(cmd *cobra.Command, args []string) {
 
 	// Selecting models for each role
 	mp.Planner = getPlannerRoleConfig(customModels)
-	mp.PlanSummary = getModelRoleConfig(customModels, shared.ModelRolePlanSummary)
+
+	contextLoader := getModelRoleConfig(customModels, shared.ModelRoleArchitect)
+	mp.Architect = &contextLoader
+
+	coder := getModelRoleConfig(customModels, shared.ModelRoleCoder)
+	mp.Coder = &coder
+
 	mp.Builder = getModelRoleConfig(customModels, shared.ModelRoleBuilder)
+
+	wholeFileBuilder := getModelRoleConfig(customModels, shared.ModelRoleWholeFileBuilder)
+	mp.WholeFileBuilder = &wholeFileBuilder
+
 	mp.Namer = getModelRoleConfig(customModels, shared.ModelRoleName)
 	mp.CommitMsg = getModelRoleConfig(customModels, shared.ModelRoleCommitMsg)
+
+	mp.PlanSummary = getModelRoleConfig(customModels, shared.ModelRolePlanSummary)
 	mp.ExecStatus = getModelRoleConfig(customModels, shared.ModelRoleExecStatus)
-	verifier := getModelRoleConfig(customModels, shared.ModelRoleVerifier)
-	mp.Verifier = &verifier
-	autoFix := getModelRoleConfig(customModels, shared.ModelRoleAutoFix)
-	mp.AutoFix = &autoFix
 
 	term.StartSpinner("")
 	apiErr = api.Client.CreateModelPack(mp)
@@ -226,6 +250,191 @@ func createModelPack(cmd *cobra.Command, args []string) {
 	fmt.Println()
 
 	term.PrintCmds("", "model-packs", "model-packs --custom", "model-packs delete")
+}
+
+func updateModelPack(cmd *cobra.Command, args []string) {
+	auth.MustResolveAuthWithOrg()
+
+	term.StartSpinner("")
+	modelPacks, apiErr := api.Client.ListModelPacks()
+
+	if apiErr != nil {
+		term.StopSpinner()
+		term.OutputErrorAndExit("Error fetching models: %v", apiErr)
+	}
+
+	if len(modelPacks) == 0 {
+		term.StopSpinner()
+		fmt.Println("🤷‍♂️ No model packs")
+		return
+	}
+
+	customModels, apiErr := api.Client.ListCustomModels()
+	term.StopSpinner()
+	if apiErr != nil {
+		term.OutputErrorAndExit("Error fetching models: %v", apiErr)
+	}
+
+	var toUpdate *shared.ModelPack
+
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	}
+
+	if name == "" {
+		opts := make([]string, len(modelPacks))
+		for i, mp := range modelPacks {
+			opts[i] = mp.Name
+		}
+
+		selected, err := term.SelectFromList("Select a custom model pack:", opts)
+		if err != nil {
+			term.OutputErrorAndExit("Error selecting model pack: %v", err)
+		}
+
+		for _, mp := range modelPacks {
+			if mp.Name == selected {
+				toUpdate = mp
+				break
+			}
+		}
+	}
+
+	if toUpdate == nil {
+		term.OutputErrorAndExit("Model pack not found")
+		return
+	}
+
+	var role shared.ModelRole
+
+	roleOpts := make([]string, len(shared.AllModelRoles))
+	for i, role := range shared.AllModelRoles {
+		roleOpts[i] = string(role)
+	}
+
+	renderModelPack(toUpdate)
+
+	for {
+		selected, err := term.SelectFromList("Select a role to update:", roleOpts)
+		if err != nil {
+			term.OutputErrorAndExit("Error selecting role: %v", err)
+		}
+
+		role = shared.ModelRole(selected)
+
+		switch role {
+		case shared.ModelRolePlanner:
+			toUpdate.Planner = getPlannerRoleConfig(customModels)
+		case shared.ModelRoleArchitect:
+			contextLoader := getModelRoleConfig(customModels, shared.ModelRoleArchitect)
+			toUpdate.Architect = &contextLoader
+		case shared.ModelRoleCoder:
+			coder := getModelRoleConfig(customModels, shared.ModelRoleCoder)
+			toUpdate.Coder = &coder
+		case shared.ModelRoleBuilder:
+			builder := getModelRoleConfig(customModels, shared.ModelRoleBuilder)
+			toUpdate.Builder = builder
+		case shared.ModelRoleWholeFileBuilder:
+			wholeFileBuilder := getModelRoleConfig(customModels, shared.ModelRoleWholeFileBuilder)
+			toUpdate.WholeFileBuilder = &wholeFileBuilder
+		case shared.ModelRolePlanSummary:
+			toUpdate.PlanSummary = getModelRoleConfig(customModels, role)
+		case shared.ModelRoleExecStatus:
+			toUpdate.ExecStatus = getModelRoleConfig(customModels, role)
+		case shared.ModelRoleCommitMsg:
+			toUpdate.CommitMsg = getModelRoleConfig(customModels, role)
+		case shared.ModelRoleName:
+			toUpdate.Namer = getModelRoleConfig(customModels, role)
+		}
+
+		updateOpt := "Update another role"
+		saveOpt := "Save model pack and exit"
+		opts := []string{updateOpt, saveOpt}
+
+		selected, err = term.SelectFromList("Finished editing?", opts)
+		if err != nil {
+			term.OutputErrorAndExit("Error selecting option: %v", err)
+		}
+
+		if selected == saveOpt {
+			break
+		}
+	}
+
+	term.StartSpinner("")
+	apiErr = api.Client.UpdateModelPack(toUpdate)
+	term.StopSpinner()
+
+	if apiErr != nil {
+		term.OutputErrorAndExit("Error updating model pack: %v", apiErr.Msg)
+	}
+
+	fmt.Println("✅ Model pack updated")
+
+	fmt.Println()
+
+	term.PrintCmds("", "model-packs show", "set-model", "set-model default")
+}
+
+func showModelPack(cmd *cobra.Command, args []string) {
+	auth.MustResolveAuthWithOrg()
+
+	term.StartSpinner("")
+	customModelPacks, apiErr := api.Client.ListModelPacks()
+	term.StopSpinner()
+
+	if apiErr != nil {
+		term.OutputErrorAndExit("Error fetching models: %v", apiErr)
+	}
+
+	modelPacks := []*shared.ModelPack{}
+	modelPacks = append(modelPacks, customModelPacks...)
+	modelPacks = append(modelPacks, shared.BuiltInModelPacks...)
+
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	}
+
+	var modelPack *shared.ModelPack
+
+	if name == "" {
+		opts := make([]string, len(modelPacks))
+		for i, mp := range modelPacks {
+			opts[i] = mp.Name
+		}
+
+		selected, err := term.SelectFromList("Select a model pack:", opts)
+		if err != nil {
+			term.OutputErrorAndExit("Error selecting model pack: %v", err)
+		}
+
+		for _, mp := range modelPacks {
+			if mp.Name == selected {
+				modelPack = mp
+				break
+			}
+		}
+	} else {
+		for _, mp := range modelPacks {
+			if mp.Name == name {
+				modelPack = mp
+				break
+			}
+		}
+	}
+
+	if modelPack == nil {
+		term.OutputErrorAndExit("Model pack not found")
+		return
+	}
+
+	renderModelPack(modelPack)
+
+	fmt.Println()
+
+	term.PrintCmds("", "model-packs update", "model-packs delete", "set-model", "set-model default")
 }
 
 func getModelRoleConfig(customModels []*shared.AvailableModel, modelRole shared.ModelRole) shared.ModelRoleConfig {
@@ -256,11 +465,24 @@ func getModelWithRoleConfig(customModels []*shared.AvailableModel, modelRole sha
 		term.OutputErrorAndExit("Invalid number for top P: %v", err)
 	}
 
+	var reservedOutputTokens int
+	if modelRole == shared.ModelRoleBuilder || modelRole == shared.ModelRolePlanner || modelRole == shared.ModelRoleWholeFileBuilder {
+		reservedOutputTokensStr, err := term.GetUserStringInputWithDefault("Reserved output tokens for "+role+":", fmt.Sprintf("%d", model.ReservedOutputTokens))
+		if err != nil {
+			term.OutputErrorAndExit("Error reading reserved output tokens: %v", err)
+		}
+		reservedOutputTokens, err = strconv.Atoi(reservedOutputTokensStr)
+		if err != nil {
+			term.OutputErrorAndExit("Invalid number for reserved output tokens: %v", err)
+		}
+	}
+
 	return model, shared.ModelRoleConfig{
-		Role:            modelRole,
-		BaseModelConfig: model.BaseModelConfig,
-		Temperature:     float32(temperature),
-		TopP:            float32(topP),
+		Role:                 modelRole,
+		BaseModelConfig:      model.BaseModelConfig,
+		Temperature:          float32(temperature),
+		TopP:                 float32(topP),
+		ReservedOutputTokens: reservedOutputTokens,
 	}
 }
 
@@ -270,8 +492,7 @@ func getPlannerRoleConfig(customModels []*shared.AvailableModel) shared.PlannerR
 	return shared.PlannerRoleConfig{
 		ModelRoleConfig: modelConfig,
 		PlannerModelConfig: shared.PlannerModelConfig{
-			MaxConvoTokens:       model.DefaultMaxConvoTokens,
-			ReservedOutputTokens: model.DefaultReservedOutputTokens,
+			MaxConvoTokens: model.DefaultMaxConvoTokens,
 		},
 	}
 }

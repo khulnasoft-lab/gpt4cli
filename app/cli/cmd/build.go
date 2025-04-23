@@ -2,16 +2,16 @@ package cmd
 
 import (
 	"fmt"
-	"gpt4cli/auth"
-	"gpt4cli/lib"
-	"gpt4cli/plan_exec"
-	"gpt4cli/term"
+	"gpt4cli-cli/auth"
+	"gpt4cli-cli/lib"
+	"gpt4cli-cli/plan_exec"
+	"gpt4cli-cli/term"
+	"gpt4cli-cli/types"
 
-	"github.com/khulnasoft/gpt4cli/shared"
+	shared "gpt4cli-shared"
+
 	"github.com/spf13/cobra"
 )
-
-var buildBg bool
 
 var buildCmd = &cobra.Command{
 	Use:     "build",
@@ -24,27 +24,39 @@ var buildCmd = &cobra.Command{
 
 func init() {
 	RootCmd.AddCommand(buildCmd)
-	buildCmd.Flags().BoolVar(&buildBg, "bg", false, "Execute autonomously in the background")
+
+	initExecFlags(buildCmd, initExecFlagsParams{
+		omitFile:         true,
+		omitNoBuild:      true,
+		omitEditor:       true,
+		omitStop:         true,
+		omitAutoContext:  true,
+		omitSmartContext: true,
+	})
 }
 
 func build(cmd *cobra.Command, args []string) {
 	auth.MustResolveAuthWithOrg()
 	lib.MustResolveProject()
+	mustSetPlanExecFlags(cmd)
 
-	if lib.CurrentPlanId == "" {
-		term.OutputNoCurrentPlanErrorAndExit()
+	var apiKeys map[string]string
+	if !auth.Current.IntegratedModelsMode {
+		apiKeys = lib.MustVerifyApiKeys()
 	}
-
-	apiKeys := lib.MustVerifyApiKeys()
 
 	didBuild, err := plan_exec.Build(plan_exec.ExecParams{
 		CurrentPlanId: lib.CurrentPlanId,
 		CurrentBranch: lib.CurrentBranch,
 		ApiKeys:       apiKeys,
-		CheckOutdatedContext: func(maybeContexts []*shared.Context) (bool, bool) {
-			return lib.MustCheckOutdatedContext(false, maybeContexts)
+		CheckOutdatedContext: func(maybeContexts []*shared.Context, projectPaths *types.ProjectPaths) (bool, bool, error) {
+			auto := autoConfirm || tellAutoApply || tellAutoContext
+			return lib.CheckOutdatedContextWithOutput(auto, auto, maybeContexts, projectPaths)
 		},
-	}, buildBg)
+	}, types.BuildFlags{
+		BuildBg:   tellBg,
+		AutoApply: tellAutoApply,
+	})
 
 	if err != nil {
 		term.OutputErrorAndExit("Error building plan: %v", err)
@@ -56,12 +68,35 @@ func build(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if buildBg {
+	if tellBg {
 		fmt.Println("🏗️ Building plan in the background")
 		fmt.Println()
 		term.PrintCmds("", "ps", "connect", "stop")
+	} else if tellAutoApply {
+		applyFlags := types.ApplyFlags{
+			AutoConfirm: true,
+			AutoCommit:  autoCommit,
+			NoCommit:    !autoCommit,
+			NoExec:      noExec,
+			AutoExec:    autoExec,
+			AutoDebug:   autoDebug,
+		}
+
+		tellFlags := types.TellFlags{
+			AutoContext: tellAutoContext,
+			ExecEnabled: !noExec,
+			AutoApply:   tellAutoApply,
+		}
+
+		lib.MustApplyPlan(lib.ApplyPlanParams{
+			PlanId:     lib.CurrentPlanId,
+			Branch:     lib.CurrentBranch,
+			ApplyFlags: applyFlags,
+			TellFlags:  tellFlags,
+			OnExecFail: plan_exec.GetOnApplyExecFail(applyFlags, tellFlags),
+		})
 	} else {
 		fmt.Println()
-		term.PrintCmds("", "changes", "apply", "reject", "log")
+		term.PrintCmds("", "diff", "diff --ui", "apply", "reject", "log")
 	}
 }

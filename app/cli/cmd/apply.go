@@ -1,19 +1,25 @@
 package cmd
 
 import (
-	"gpt4cli/auth"
-	"gpt4cli/lib"
-	"gpt4cli/term"
+	"gpt4cli-cli/api"
+	"gpt4cli-cli/auth"
+	"gpt4cli-cli/lib"
+	"gpt4cli-cli/plan_exec"
+	"gpt4cli-cli/term"
+	"gpt4cli-cli/types"
+	shared "gpt4cli-shared"
 
 	"github.com/spf13/cobra"
 )
 
-var autoConfirm bool
+var autoCommit, skipCommit, autoExec bool
 
 func init() {
-	applyCmd.Flags().BoolVarP(&autoConfirm, "yes", "y", false, "Automatically confirm unless plan is outdated")
-
+	initApplyFlags(applyCmd, false)
+	initExecScriptFlags(applyCmd)
 	RootCmd.AddCommand(applyCmd)
+
+	applyCmd.Flags().BoolVar(&fullAuto, "full", false, "Apply the plan and debug in full auto mode")
 }
 
 var applyCmd = &cobra.Command{
@@ -27,9 +33,49 @@ func apply(cmd *cobra.Command, args []string) {
 	auth.MustResolveAuthWithOrg()
 	lib.MustResolveProject()
 
+	var config *shared.PlanConfig
+	if fullAuto {
+		term.StartSpinner("")
+		var apiErr *shared.ApiError
+		config, apiErr = api.Client.GetPlanConfig(lib.CurrentPlanId)
+		if apiErr != nil {
+			term.OutputErrorAndExit("Error getting plan config: %v", apiErr)
+		}
+		_, updatedConfig, printFn := resolveAutoModeSilent(config)
+		config = updatedConfig
+		term.StopSpinner()
+		printFn()
+	}
+
+	mustSetPlanExecFlagsWithConfig(cmd, config)
+
 	if lib.CurrentPlanId == "" {
 		term.OutputNoCurrentPlanErrorAndExit()
 	}
 
-	lib.MustApplyPlan(lib.CurrentPlanId, lib.CurrentBranch, autoConfirm)
+	applyFlags := types.ApplyFlags{
+		AutoConfirm: true,
+		AutoCommit:  autoCommit,
+		NoCommit:    skipCommit,
+		AutoExec:    autoExec,
+		NoExec:      noExec,
+		AutoDebug:   autoDebug,
+	}
+
+	tellFlags := types.TellFlags{
+		TellBg:      tellBg,
+		TellStop:    tellStop,
+		TellNoBuild: tellNoBuild,
+		AutoContext: tellAutoContext,
+		ExecEnabled: !noExec,
+		AutoApply:   tellAutoApply,
+	}
+
+	lib.MustApplyPlan(lib.ApplyPlanParams{
+		PlanId:     lib.CurrentPlanId,
+		Branch:     lib.CurrentBranch,
+		ApplyFlags: applyFlags,
+		TellFlags:  tellFlags,
+		OnExecFail: plan_exec.GetOnApplyExecFail(applyFlags, tellFlags),
+	})
 }
