@@ -52,3 +52,13 @@ gpt4cli
 ```
 
 You're ready to start building!
+
+## Upgrade
+
+To upgrade after a new release, just use `ctrl-c` to stop the server, then run the script again:
+
+```bash
+./start_local.sh
+```
+
+The script will pull the latest image before the server starts.
