@@ -6,7 +6,6 @@
 
 set -euo pipefail  # Exit on error, treat unset vars as errors, fail on pipeline errors
 
-SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # Print usage/help
 if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
@@ -106,11 +105,11 @@ fi
 
 welcome_gpt4cli () {
   echo ""
-  echo "$(printf '%*s' "$(tput cols)" '' | tr ' ' -)"
+  printf '%*s' "$(tput cols)" '' | tr ' ' -
   echo ""
   echo "🚀 Gpt4cli v$VERSION • Quick Install"
   echo ""
-  echo "$(printf '%*s' "$(tput cols)" '' | tr ' ' -)"
+  printf '%*s' "$(tput cols)" '' | tr ' ' -
   echo ""
 }
 
@@ -138,7 +137,7 @@ download_gpt4cli () {
           should_sudo=true
           echo "Attempting to use sudo to complete installation."
           sudo mv gpt4cli /usr/local/bin/
-          if [[ $? -eq 0 ]]; then
+          if sudo mv gpt4cli /usr/local/bin/; then
             echo "✅ Gpt4cli is installed in /usr/local/bin"
             echo ""
           else
@@ -235,16 +234,16 @@ download_gpt4cli
 echo ""
 echo "🎉 Installation complete"
 echo ""
-echo "$(printf '%*s' "$(tput cols)" '' | tr ' ' -)"
+printf '%*s' "$(tput cols)" '' | tr ' ' -
 echo ""
 echo "⚡️ Run 'gpt4cli' or 'g4c' in any project directory and start building!"
 echo ""
-echo "$(printf '%*s' "$(tput cols)" '' | tr ' ' -)"
+printf '%*s' "$(tput cols)" '' | tr ' ' -
 echo ""
 echo "📚 Need help? 👉 https://docs.gpt4cli.khulnasoft.com"
 echo ""
 echo "👋 Join a community of AI builders 👉 https://discord.gg/khulnasoft"
 echo ""
-echo "$(printf '%*s' "$(tput cols)" '' | tr ' ' -)"
+printf '%*s' "$(tput cols)" '' | tr ' ' -
 echo ""
 
