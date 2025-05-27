@@ -1,21 +1,44 @@
 #!/usr/bin/env bash
+#
+# Gpt4cli Quick Installer
+# This script installs the latest (or requested) version of Gpt4cli for supported platforms.
+# See: https://docs.gpt4cli.khulnasoft.com
 
-set -e
+set -euo pipefail  # Exit on error, treat unset vars as errors, fail on pipeline errors
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-PLATFORM=
-ARCH=
-VERSION=
-RELEASES_URL="https://github.com/khulnasoft/gpt4cli/releases/download"
+# Print usage/help
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+  echo "Usage: bash install.sh"
+  echo "Installs the latest (or requested) version of Gpt4cli for supported platforms."
+  echo "Set GPT4CLI_VERSION to install a specific version."
+  exit 0
+fi
 
- # Ensure cleanup happens on exit and on specific signals
+# Check for required commands
+for cmd in curl tar tput uname grep mktemp; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' not found. Please install it and retry." >&2
+    exit 1
+  fi
+done
+
+PLATFORM=""
+ARCH=""
+VERSION=""
+RELEASES_URL="https://github.com/khulnasoft-lab/gpt4cli/releases/download"
+
+# Ensure cleanup happens on exit and on specific signals
 trap cleanup EXIT
 trap cleanup INT TERM
 
+# Use a secure temp directory
+INSTALL_TMPDIR="$(mktemp -d -t gpt4cli_install_XXXXXX)"
+
 cleanup () {
-  cd "${SCRIPT_DIR}"
-  rm -rf gpt4cli_install_tmp
+  # Only remove if it exists
+  [ -d "$INSTALL_TMPDIR" ] && rm -rf "$INSTALL_TMPDIR"
 }
 
 # Set platform
@@ -48,14 +71,25 @@ if [[ "$PLATFORM" == "windows" ]]; then
   exit 1
 fi
 
-# Set arch
-if [[ "$(uname -m)" == 'x86_64' ]]; then
-  ARCH="amd64"
-elif [[ "$(uname -m)" == 'arm64' || "$(uname -m)" == 'aarch64' ]]; then
-  ARCH="arm64"
-fi
+# Set arch (support more variants)
+case "$(uname -m)" in
+  x86_64|amd64)
+    ARCH="amd64"
+    ;;
+  arm64|aarch64)
+    ARCH="arm64"
+    ;;
+  armv7l)
+    ARCH="armv7"
+    ;;
+  *)
+    echo "Unknown architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
 
-if [[ "$(cat /proc/1/cgroup 2> /dev/null | grep docker | wc -l)" > 0 ]] || [ -f /.dockerenv ]; then
+# Detect Docker (portable)
+if grep -qE '/docker/|/lxc/' /proc/1/cgroup 2>/dev/null || [ -f /.dockerenv ]; then
   IS_DOCKER=true
 else
   IS_DOCKER=false
@@ -82,11 +116,9 @@ welcome_gpt4cli () {
 
 download_gpt4cli () {
   ENCODED_TAG="cli%2Fv${VERSION}"
-
   url="${RELEASES_URL}/${ENCODED_TAG}/gpt4cli_${VERSION}_${PLATFORM}_${ARCH}.tar.gz"
 
-  mkdir -p gpt4cli_install_tmp
-  cd gpt4cli_install_tmp
+  cd "$INSTALL_TMPDIR"
 
   echo "📥 Downloading Gpt4cli tarball"
   echo ""
@@ -98,11 +130,11 @@ download_gpt4cli () {
 
   should_sudo=false
 
-  if [ "$PLATFORM" == "darwin" ] || $IS_DOCKER ; then
+  if [ "$PLATFORM" = "darwin" ] || $IS_DOCKER ; then
     if [[ -d /usr/local/bin ]]; then
       if ! mv gpt4cli /usr/local/bin/ 2>/dev/null; then
         echo "Permission denied when attempting to move Gpt4cli to /usr/local/bin."
-        if hash sudo 2>/dev/null; then
+        if command -v sudo 2>/dev/null; then
           should_sudo=true
           echo "Attempting to use sudo to complete installation."
           sudo mv gpt4cli /usr/local/bin/
@@ -125,37 +157,36 @@ download_gpt4cli () {
       exit 1
     fi
   else
-    if [ $UID -eq 0 ]
-    then
-      # we are root
+    if [ "$(id -u)" -eq 0 ]; then
       mv gpt4cli /usr/local/bin/
-    elif hash sudo 2>/dev/null;
-    then
-      # not root, but can sudo
+    elif command -v sudo 1>/dev/null 2>&1; then
       sudo mv gpt4cli /usr/local/bin/
       should_sudo=true
     else
       echo "ERROR: This script must be run as root or be able to sudo to complete the installation."
       exit 1
     fi
-
     echo "✅ Gpt4cli is installed in /usr/local/bin"
   fi
 
   # create 'g4c' alias, but don't overwrite existing g4c command
-  if [ ! -x "$(command -v g4c)" ]; then
+  if ! command -v g4c >/dev/null 2>&1; then
     echo "🎭 Creating g4c alias..."
-    LOC=$(which gpt4cli)
-    BIN_DIR=$(dirname "$LOC")
+    LOC=$(command -v gpt4cli)
+    BIN_DIR="$(dirname "$LOC")"
 
     if [ "$should_sudo" = true ]; then
-      sudo ln -s "$LOC" "$BIN_DIR/g4c" && \
-        echo "✅ Successfully created 'g4c' alias with sudo." || \
+      if sudo ln -s "$LOC" "$BIN_DIR/g4c"; then
+        echo "✅ Successfully created 'g4c' alias with sudo."
+      else
         echo "⚠️ Failed to create 'g4c' alias even with sudo. Please create it manually."
+      fi
     else
-      ln -s "$LOC" "$BIN_DIR/g4c" && \
-        echo "✅ Successfully created 'g4c' alias." || \
+      if ln -s "$LOC" "$BIN_DIR/g4c"; then
+        echo "✅ Successfully created 'g4c' alias."
+      else
         echo "⚠️ Failed to create 'g4c' alias. Please create it manually."
+      fi
     fi
   fi
 }
@@ -168,18 +199,26 @@ check_existing_installation () {
       echo "Found existing Gpt4cli v1.x installation ($existing_version). Renaming to 'gpt4cli1' before installing v2..."
       
       # Get the location of existing binary
-      existing_binary=$(which gpt4cli)
-      binary_dir=$(dirname "$existing_binary")
+      existing_binary=$(command -v gpt4cli)
+      binary_dir="$(dirname "$existing_binary")"
       
       # Rename gpt4cli to gpt4cli1
       if ! mv "$existing_binary" "${binary_dir}/gpt4cli1" 2>/dev/null; then
-        sudo mv "$existing_binary" "${binary_dir}/gpt4cli1"
+        if command -v sudo 1>/dev/null 2>&1; then
+          sudo mv "$existing_binary" "${binary_dir}/gpt4cli1"
+        else
+          echo "Cannot rename old gpt4cli without sudo. Please rename manually."
+        fi
       fi
       
       # Rename g4c to g4c1 if it exists
       if [ -L "${binary_dir}/g4c" ]; then
         if ! mv "${binary_dir}/g4c" "${binary_dir}/g4c1" 2>/dev/null; then
-          sudo mv "${binary_dir}/g4c" "${binary_dir}/g4c1"
+          if command -v sudo 1>/dev/null 2>&1; then
+            sudo mv "${binary_dir}/g4c" "${binary_dir}/g4c1"
+          else
+            echo "Cannot rename old g4c without sudo. Please rename manually."
+          fi
         fi
         echo "Renamed 'g4c' alias to 'g4c1'"
       fi
