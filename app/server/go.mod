@@ -29,7 +29,7 @@ require (
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/image v0.25.0 // indirect
-	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -43,7 +43,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/net v0.34.0
+	golang.org/x/net v0.38.0
 	gpt4cli-shared v0.0.0-00010101000000-000000000000
 )
 
