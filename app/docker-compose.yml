@@ -1,0 +1,38 @@
+services:
+  gpt4cli-postgres:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: gpt4cli
+      POSTGRES_USER: gpt4cli
+      POSTGRES_DB: gpt4cli
+    ports:
+      - "5432:5432"
+    volumes:
+      - gpt4cli-db:/var/lib/postgresql/data
+    networks:
+      - gpt4cli-network
+  gpt4cli-server:
+    image: gpt4cliai/gpt4cli-server:latest
+    volumes:
+      - gpt4cli-files:/gpt4cli-server
+    ports:
+      - "8099:8099"
+    environment:
+      DATABASE_URL: "postgres://gpt4cli:gpt4cli@gpt4cli-postgres:5432/gpt4cli?sslmode=disable"
+      GOENV: development
+      LOCAL_MODE: 1
+      GPT4CLI_BASE_DIR: /gpt4cli-server
+    networks:
+      - gpt4cli-network
+    depends_on:
+      - gpt4cli-postgres
+    command: [ "/bin/sh", "-c", "/scripts/wait-for-it.sh gpt4cli-postgres:5432 -- ./gpt4cli-server" ]
+
+networks:
+  gpt4cli-network:
+    driver: bridge
+
+volumes:
+  gpt4cli-db:
+  gpt4cli-files:
